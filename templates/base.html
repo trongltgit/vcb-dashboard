@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}VCB Dashboard MBNT & TTQT{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    .table th, .table td { border: 1px solid #e5e7eb; padding: 0.4rem 0.6rem; text-align: left; }
+    .table th { background: #f3f4f6; }
+    .chart-img { max-width: 100%; height: auto; border-radius: 0.5rem; background: #fff; }
+    pre.report { white-space: pre-wrap; font-size: 0.85rem; line-height: 1.5; }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+  <nav class="bg-blue-900 text-white shadow">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+      <a href="/" class="font-semibold text-lg tracking-tight">🏦 VCB Analytics</a>
+      <div class="text-sm opacity-90">MBNT · TTQT/TTTM Dashboard</div>
+    </div>
+  </nav>
+
+  <main class="max-w-7xl mx-auto px-4 py-6">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for cat, msg in messages %}
+          <div class="mb-4 rounded-lg px-4 py-3 text-sm
+            {% if cat == 'error' %}bg-red-50 text-red-800 border border-red-200
+            {% else %}bg-emerald-50 text-emerald-800 border border-emerald-200{% endif %}">
+            {{ msg }}
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="text-center text-xs text-slate-400 py-6">
+    VCB Dashboard · Ported from Excel Python · Flask · AI by Groq
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

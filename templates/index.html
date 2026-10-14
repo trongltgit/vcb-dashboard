@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid lg:grid-cols-3 gap-6">
+  <div class="lg:col-span-1">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 sticky top-4">
+      <h2 class="text-lg font-semibold mb-4">Bộ lọc & Upload</h2>
+      <form action="{{ url_for('run_analysis') }}" method="post" enctype="multipart/form-data" class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-1">Groq API Key (tùy chọn)</label>
+          <input type="password" name="groq_key" value="{{ groq_key }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                 placeholder="gsk_..." />
+          <p class="text-xs text-slate-400 mt-1">console.groq.com – dùng cho AI bot</p>
+        </div>
+
+        <hr class="border-slate-100" />
+
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-1">Data_Raw_MBNT *</label>
+          <input type="file" name="mbnt" accept=".xlsx,.xls,.csv" required
+                 class="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-1">Data_Raw_TTQT_TTTM *</label>
+          <input type="file" name="ttqt" accept=".xlsx,.xls,.csv" required
+                 class="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-1">KE_HOACH (tùy chọn)</label>
+          <input type="file" name="plan" accept=".xlsx,.xls,.csv"
+                 class="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-slate-50 file:text-slate-600" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-1">Báo cáo external (PDF/DOCX/TXT)</label>
+          <input type="file" name="external" accept=".pdf,.docx,.txt,.md"
+                 class="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-slate-50 file:text-slate-600" />
+        </div>
+
+        <hr class="border-slate-100" />
+
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-1">Phòng / Chi nhánh</label>
+          <input type="text" name="phong" placeholder="Để trống = VCB HCM"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1">Từ ngày</label>
+            <input type="date" name="d_from" value="2026-01-01"
+                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-600 mb-1">Đến ngày</label>
+            <input type="date" name="d_to" value="2026-12-31"
+                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+        </div>
+
+        <button type="submit"
+                class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition">
+          🚀 Chạy phân tích
+        </button>
+      </form>
+
+      {% if has_data %}
+      <form action="{{ url_for('reset') }}" method="post" class="mt-3">
+        <button type="submit" class="w-full text-sm text-slate-500 hover:text-red-600 py-2">
+          Xóa dữ liệu hiện tại
+        </button>
+      </form>
+      <a href="{{ url_for('dashboard') }}"
+         class="mt-2 block text-center text-sm text-blue-600 hover:underline">
+        → Xem dashboard đã chạy
+      </a>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="lg:col-span-2">
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+      <h1 class="text-2xl font-bold text-slate-900 mb-2">Dashboard Phân tích MBNT & TTQT/TTTM</h1>
+      <p class="text-slate-600 mb-6">
+        Thay thế hoàn toàn Python in Excel – chạy ổn định trên Render, có AI bot viết báo cáo chuyên nghiệp.
+      </p>
+
+      <div class="grid sm:grid-cols-2 gap-4 text-sm">
+        <div class="rounded-lg bg-blue-50 border border-blue-100 p-4">
+          <div class="font-semibold text-blue-900 mb-1">Upload 2 file raw</div>
+          <p class="text-blue-800/80">Data_Raw_MBNT + Data_Raw_TTQT_TTTM (Excel/CSV)</p>
+        </div>
+        <div class="rounded-lg bg-emerald-50 border border-emerald-100 p-4">
+          <div class="font-semibold text-emerald-900 mb-1">Bộ lọc giống Excel</div>
+          <p class="text-emerald-800/80">Phòng/CN + khoảng ngày, loại cá nhân tự động</p>
+        </div>
+        <div class="rounded-lg bg-violet-50 border border-violet-100 p-4">
+          <div class="font-semibold text-violet-900 mb-1">KPI TOP 20% / BOT 10%</div>
+          <p class="text-violet-800/80">Doanh số & LN MBNT, TTQT (XK/NK)</p>
+        </div>
+        <div class="rounded-lg bg-amber-50 border border-amber-100 p-4">
+          <div class="font-semibold text-amber-900 mb-1">AI Bot (Groq)</div>
+          <p class="text-amber-800/80">Báo cáo chuyên sâu + chat với dữ liệu</p>
+        </div>
+      </div>
+
+      <div class="mt-8 text-sm text-slate-500 border-t border-slate-100 pt-4">
+        <p class="font-medium text-slate-700 mb-1">Lưu ý cột dữ liệu</p>
+        <ul class="list-disc list-inside space-y-1">
+          <li>MBNT: Ngày giao dịch, Ma_CIF, Ten_Khach_Hang, Phong_Ban, Chieu_NH, DS_Quy_USD, Loi_Nhuan_VND…</li>
+          <li>TTQT: Ngay_GD, Ma_CIF, Ten_Khach_Hang, Phong_Ban, DS XK / NK / XNK</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

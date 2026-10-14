@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+  <div>
+    <h1 class="text-2xl font-bold">Kết quả phân tích</h1>
+    <p class="text-sm text-slate-500">
+      {{ data.phong or 'VCB HCM' }} · {{ data.d_from }} → {{ data.d_to }}
+    </p>
+  </div>
+  <div class="flex gap-2">
+    <a href="{{ url_for('index') }}" class="text-sm px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">← Upload lại</a>
+    <a href="{{ url_for('export_csv') }}" class="text-sm px-3 py-1.5 rounded-lg bg-slate-800 text-white hover:bg-slate-700">⬇️ CSV</a>
+    <a href="{{ url_for('export_report') }}" class="text-sm px-3 py-1.5 rounded-lg bg-slate-800 text-white hover:bg-slate-700">⬇️ Báo cáo</a>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div x-data="{ tab: 'mbnt' }" class="space-y-4">
+  <div class="flex flex-wrap gap-1 border-b border-slate-200 pb-1">
+    <template x-for="t in [
+      {id:'mbnt', label:'📈 KPI MBNT'},
+      {id:'ttqt', label:'🌍 KPI TTQT'},
+      {id:'rel', label:'🔗 Quan hệ'},
+      {id:'report', label:'📋 Báo cáo'},
+      {id:'ai', label:'🤖 AI Bot'},
+    ]">
+      <button type="button"
+              @click="tab = t.id"
+              :class="tab === t.id ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-100'"
+              class="px-3 py-1.5 rounded-t-lg text-sm font-medium border border-b-0 border-slate-200"
+              x-text="t.label"></button>
+    </template>
+  </div>
+
+  <!-- MBNT -->
+  <div x-show="tab === 'mbnt'" class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+    <h2 class="font-semibold text-lg mb-4">Tổng quan MBNT</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+      <div class="rounded-lg bg-blue-50 p-3">
+        <div class="text-xs text-blue-600">Tổng DS (USD)</div>
+        <div class="text-lg font-bold">{{ "{:,.0f}".format(data.metrics.mbnt_ds) }}</div>
+      </div>
+      <div class="rounded-lg bg-emerald-50 p-3">
+        <div class="text-xs text-emerald-600">Tổng LN (VND)</div>
+        <div class="text-lg font-bold">{{ "{:,.0f}".format(data.metrics.mbnt_ln) }}</div>
+      </div>
+      <div class="rounded-lg bg-slate-50 p-3">
+        <div class="text-xs text-slate-500">Số giao dịch</div>
+        <div class="text-lg font-bold">{{ "{:,}".format(data.metrics.mbnt_gd) }}</div>
+      </div>
+      <div class="rounded-lg bg-slate-50 p-3">
+        <div class="text-xs text-slate-500">CIF unique</div>
+        <div class="text-lg font-bold">{{ "{:,}".format(data.metrics.mbnt_cif) }}</div>
+      </div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4">
+      {% if data.charts.get('mbnt_top_ds') %}
+      <img class="chart-img" src="data:image/png;base64,{{ data.charts.mbnt_top_ds }}" alt="TOP DS MBNT" />
+      {% endif %}
+      {% if data.charts.get('mbnt_bot_ds') %}
+      <img class="chart-img" src="data:image/png;base64,{{ data.charts.mbnt_bot_ds }}" alt="BOT DS MBNT" />
+      {% endif %}
+      {% if data.charts.get('mbnt_top_ln') %}
+      <img class="chart-img" src="data:image/png;base64,{{ data.charts.mbnt_top_ln }}" alt="TOP LN MBNT" />
+      {% endif %}
+      {% if data.charts.get('mbnt_bot_ln') %}
+      <img class="chart-img" src="data:image/png;base64,{{ data.charts.mbnt_bot_ln }}" alt="BOT LN MBNT" />
+      {% endif %}
+    </div>
+    {% if data.tds_html %}
+    <details class="mt-6">
+      <summary class="cursor-pointer text-sm font-medium text-slate-600">Bảng TOP / BOT chi tiết</summary>
+      <div class="mt-3 overflow-x-auto">
+        <h3 class="text-sm font-semibold mb-1">TOP 20% DS</h3>
+        {{ data.tds_html | safe }}
+        <h3 class="text-sm font-semibold mb-1 mt-4">BOT 10% DS</h3>
+        {{ data.bds_html | safe }}
+      </div>
+    </details>
+    {% endif %}
+  </div>
+
+  <!-- TTQT -->
+  <div x-show="tab === 'ttqt'" class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm" style="display:none">
+    <h2 class="font-semibold text-lg mb-4">Tổng quan TTQT/TTTM</h2>
+    <div class="grid grid-cols-3 gap-3 mb-6">
+      <div class="rounded-lg bg-sky-50 p-3">
+        <div class="text-xs text-sky-600">Tổng DS TTQT (USD)</div>
+        <div class="text-lg font-bold">{{ "{:,.0f}".format(data.metrics.ttqt_ds) }}</div>
+      </div>
+      <div class="rounded-lg bg-cyan-50 p-3">
+        <div class="text-xs text-cyan-600">XK</div>
+        <div class="text-lg font-bold">{{ "{:,.0f}".format(data.metrics.ttqt_xk) }}</div>
+      </div>
+      <div class="rounded-lg bg-teal-50 p-3">
+        <div class="text-xs text-teal-600">NK</div>
+        <div class="text-lg font-bold">{{ "{:,.0f}".format(data.metrics.ttqt_nk) }}</div>
+      </div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-4">
+      {% if data.charts.get('ttqt_top') %}
+      <img class="chart-img" src="data:image/png;base64,{{ data.charts.ttqt_top }}" alt="TOP TTQT" />
+      {% endif %}
+      {% if data.charts.get('ttqt_bot') %}
+      <img class="chart-img" src="data:image/png;base64,{{ data.charts.ttqt_bot }}" alt="BOT TTQT" />
+      {% endif %}
+    </div>
+    <h3 class="font-medium mt-6 mb-3">Tách chiều XK / NK</h3>
+    <div class="grid md:grid-cols-2 gap-4">
+      {% if data.charts.get('ttqt_xk_top') %}
+      <img class="chart-img" src="data:image/png;base64,{{ data.charts.ttqt_xk_top }}" alt="XK TOP" />
+      {% endif %}
+      {% if data.charts.get('ttqt_xk_bot') %}
+      <img class="chart-img" src="data:image/png;base64,{{ data.charts.ttqt_xk_bot }}" alt="XK BOT" />
+      {% endif %}
+      {% if data.charts.get('ttqt_nk_top') %}
+      <img class="chart-img" src="data:image/png;base64,{{ data.charts.ttqt_nk_top }}" alt="NK TOP" />
+      {% endif %}
+      {% if data.charts.get('ttqt_nk_bot') %}
+      <img class="chart-img" src="data:image/png;base64,{{ data.charts.ttqt_nk_bot }}" alt="NK BOT" />
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Relationship -->
+  <div x-show="tab === 'rel'" class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm" style="display:none">
+    <h2 class="font-semibold text-lg mb-4">Quan hệ DS TTQT ↔ DS MBNT</h2>
+    {% if data.charts.get('scatter') %}
+    <img class="chart-img max-w-3xl mx-auto mb-6" src="data:image/png;base64,{{ data.charts.scatter }}" alt="Scatter" />
+    {% endif %}
+    {% for side, rows in data.groups.items() %}
+    <h3 class="font-medium mt-4 mb-2">{{ side }}</h3>
+    <div class="overflow-x-auto">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Nhóm</th><th>Số CTY</th><th>Tổng X</th><th>Tổng Y</th><th>Y/X %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r.Nhom }}</td>
+            <td>{{ r.So_cty }}</td>
+            <td>{{ "{:,.0f}".format(r.Tong_X) }}</td>
+            <td>{{ "{:,.0f}".format(r.Tong_Y) }}</td>
+            <td>{{ r['Y/X_%'] }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Report -->
+  <div x-show="tab === 'report'" class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm" style="display:none">
+    <h2 class="font-semibold text-lg mb-4">Báo cáo phân tích chuyên sâu (tự động)</h2>
+    <pre class="report bg-slate-50 rounded-lg p-4 border border-slate-100 max-h-[600px] overflow-y-auto">{{ data.report_text }}</pre>
+  </div>
+
+  <!-- AI -->
+  <div x-show="tab === 'ai'" class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm" style="display:none"
+       x-data="aiBot()">
+    <h2 class="font-semibold text-lg mb-2">🤖 AI Bot – Báo cáo chuyên nghiệp (Groq)</h2>
+    <p class="text-sm text-slate-500 mb-4">Llama-3.3-70B · nâng cấp báo cáo + khuyến nghị hành động</p>
+
+    <div class="mb-3">
+      <label class="text-sm text-slate-600">Groq API Key (nếu chưa set env)</label>
+      <input type="password" x-model="apiKey" placeholder="gsk_..."
+             class="mt-1 w-full max-w-md rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+    </div>
+
+    <button @click="generate()" :disabled="loading"
+            class="bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg">
+      <span x-show="!loading">✨ Sinh báo cáo AI chuyên sâu</span>
+      <span x-show="loading">Đang viết…</span>
+    </button>
+
+    <div x-show="aiReport" class="mt-4">
+      <div class="prose prose-sm max-w-none bg-slate-50 rounded-lg p-4 border border-slate-100 whitespace-pre-wrap" x-text="aiReport"></div>
+    </div>
+
+    <hr class="my-6 border-slate-100" />
+    <h3 class="font-medium mb-3">Chat với dữ liệu</h3>
+    <div class="space-y-3 max-h-80 overflow-y-auto mb-3" id="chat-box">
+      <template x-for="(m, i) in history" :key="i">
+        <div :class="m.role === 'user' ? 'text-right' : 'text-left'">
+          <div class="inline-block rounded-lg px-3 py-2 text-sm max-w-[85%]"
+               :class="m.role === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-800'"
+               x-text="m.content"></div>
+        </div>
+      </template>
+    </div>
+    <form @submit.prevent="sendChat()" class="flex gap-2">
+      <input type="text" x-model="msg" placeholder="Hỏi AI về dữ liệu…"
+             class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+      <button type="submit" :disabled="chatLoading"
+              class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm disabled:opacity-50">
+        Gửi
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script>
+function aiBot() {
+  return {
+    apiKey: '',
+    loading: false,
+    chatLoading: false,
+    aiReport: {{ (data.ai_report or '') | tojson }},
+    history: {{ (data.chat_history or []) | tojson }},
+    msg: '',
+    async generate() {
+      this.loading = true;
+      try {
+        const r = await fetch('{{ url_for("ai_generate") }}', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({api_key: this.apiKey || null})
+        });
+        const j = await r.json();
+        if (j.report) this.aiReport = j.report;
+        else alert(j.error || 'Lỗi');
+      } catch (e) { alert(e); }
+      this.loading = false;
+    },
+    async sendChat() {
+      if (!this.msg.trim()) return;
+      this.chatLoading = true;
+      const userMsg = this.msg;
+      this.msg = '';
+      this.history.push({role: 'user', content: userMsg});
+      try {
+        const r = await fetch('{{ url_for("ai_chat") }}', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({message: userMsg, api_key: this.apiKey || null})
+        });
+        const j = await r.json();
+        if (j.answer) {
+          this.history = j.history || this.history.concat([{role:'assistant', content: j.answer}]);
+        } else alert(j.error || 'Lỗi');
+      } catch (e) { alert(e); }
+      this.chatLoading = false;
+      this.$nextTick(() => {
+        const box = document.getElementById('chat-box');
+        if (box) box.scrollTop = box.scrollHeight;
+      });
+    }
+  }
+}
+</script>
+{% endblock %}
