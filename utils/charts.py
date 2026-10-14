@@ -29,36 +29,60 @@ def wrap(s):
 
 
 def chart_bar(z: pd.DataFrame, title: str, u: str, col: str, top: bool, note: str = ""):
-    """Horizontal bar chart identical style to original."""
-    fig, ax = plt.subplots(figsize=(5.4, 2.85), dpi=110)
-    if z.empty:
-        ax.text(0.5, 0.5, note or "Không có dữ liệu", ha="center", va="center", fontsize=8, color="#6B7280")
+    """Horizontal bar chart; avoid tight_layout because it can be expensive on Render."""
+    fig, ax = plt.subplots(figsize=(5.4, 2.85), dpi=90)
+
+    if z is None or z.empty:
+        ax.text(
+            0.5, 0.5, note or "Không có dữ liệu",
+            ha="center", va="center", fontsize=8, color="#6B7280",
+            transform=ax.transAxes,
+        )
         ax.axis("off")
+        fig.subplots_adjust(left=0.08, right=0.98, top=0.86, bottom=0.14)
         return fig
-    zz = z.sort_values("Gia_Tri", ascending=(not top and BOT_LOWEST)).head(SHOW_N).sort_values("Gia_Tri")
-    v = zz.Gia_Tri.to_numpy()
+
+    # Only the chart is capped. The source DataFrame and KPI/ranking tables are untouched.
+    show_n = max(1, int(SHOW_N))
+    zz = (
+        z.sort_values("Gia_Tri", ascending=(not top and BOT_LOWEST))
+        .head(show_n)
+        .sort_values("Gia_Tri")
+        .copy()
+    )
+    v = pd.to_numeric(zz["Gia_Tri"], errors="coerce").fillna(0).to_numpy(dtype=float)
     y = list(range(len(v)))
     bars = ax.barh(y, v, color=col, height=0.55)
+
     ax.set_yticks(y)
-    ax.set_yticklabels(zz.Ten_Khach_Hang.map(wrap).tolist())
-    lo, hi = min(0, v.min()), max(0, v.max())
-    sp = (hi - lo) or 1
-    for b, x, sh in zip(bars, v, zz.Dong_Gop):
+    ax.set_yticklabels(zz["Ten_Khach_Hang"].map(wrap).tolist())
+
+    lo, hi = min(0.0, float(v.min())), max(0.0, float(v.max()))
+    sp = (hi - lo) or max(abs(hi), abs(lo), 1.0)
+
+    shares = pd.to_numeric(zz["Dong_Gop"], errors="coerce").fillna(0).to_numpy(dtype=float)
+    for b, x, sh in zip(bars, v, shares):
+        offset = sp * 0.015
         ax.text(
-            x + (sp * 0.015 if x >= 0 else -sp * 0.015),
+            x + (offset if x >= 0 else -offset),
             b.get_y() + b.get_height() / 2,
-            f"{fmt(x, u)} ({sh*100:.1f}%)",
+            f"{fmt(x, u)} ({sh * 100:.1f}%)",
             va="center",
             ha="left" if x >= 0 else "right",
             fontsize=5.5,
             color="#374151",
+            clip_on=True,
         )
-    ax.set_xlim(lo - (sp * 0.3 if lo < 0 else 0), hi + sp * 0.34)
+
+    ax.set_xlim(
+        lo - (sp * 0.3 if lo < 0 else 0),
+        hi + sp * 0.34 if hi >= 0 else hi + sp * 0.05,
+    )
     ax.set_title(title, loc="left", fontsize=8, fontweight="bold", color=col, pad=14)
     ax.text(
         0,
         1.03,
-        f"Nhóm {len(z):,} công ty = {z.Dong_Gop.sum()*100:.1f}% tổng · hiển thị {len(zz)}",
+        f"Nhóm {len(z):,} công ty = {pd.to_numeric(z['Dong_Gop'], errors='coerce').fillna(0).sum() * 100:.1f}% tổng · hiển thị {len(zz)}",
         transform=ax.transAxes,
         fontsize=5.5,
         color="#6B7280",
@@ -72,7 +96,10 @@ def chart_bar(z: pd.DataFrame, title: str, u: str, col: str, top: bool, note: st
     ax.spines["bottom"].set_color("#D1D5DB")
     ax.grid(axis="x", alpha=0.25)
     ax.set_axisbelow(True)
-    fig.tight_layout()
+
+    # Fixed margins avoid Matplotlib's expensive tight_layout label-measurement pass.
+    ax.margins(y=0.08)
+    fig.subplots_adjust(left=0.30, right=0.98, top=0.80, bottom=0.18)
     return fig
 
 
@@ -114,7 +141,7 @@ def chart_plan_completion(
                 fill = max(0.0, min(1.0, pct))
                 vals, cols = ([1], [color]) if fill >= 1 else ([fill, 1 - fill], [color, TRACK])
                 a.pie(vals, colors=cols, startangle=90, counterclock=False, wedgeprops={"width": 0.28, "linewidth": 0})
-                a.text(0, 0.10, f"{pct*100:.2f}%", ha="center", va="center", color="white", fontsize=9.5, fontweight="bold")
+                a.text(0, 0.10, f"{pct * 100:.2f}%", ha="center", va="center", color="white", fontsize=9.5, fontweight="bold")
                 a.text(0, -0.25, f"TH {th:,.1f}\nKH {kh:,.1f}", ha="center", va="center", color="#D1FAE5", fontsize=5, linespacing=1.2)
             if k == 0:
                 a.set_title(cname, color=color, fontsize=7.5, fontweight="bold", pad=2)
@@ -136,7 +163,7 @@ def scatter_ttqt_mbnt(df: pd.DataFrame):
 
     def fm(v):
         a = abs(v)
-        return f"{a/1e6:,.1f}M" if a >= 1e6 else f"{a/1e3:,.0f}K" if a >= 1e3 else f"{a:,.0f}"
+        return f"{a / 1e6:,.1f}M" if a >= 1e6 else f"{a / 1e3:,.0f}K" if a >= 1e3 else f"{a:,.0f}"
 
     for ax, (X, Y, c) in zip(axs, [("XK", "BUY", "#0EA5E9"), ("NK", "SELL", "#14B8A6")]):
         pp = df[(df[X] > 0) & (df[Y] > 0)]
@@ -151,5 +178,6 @@ def scatter_ttqt_mbnt(df: pd.DataFrame):
         ax.set_title(f"{X} TTQT vs MBNT {Y} (n={len(pp)}; nét đứt: y = x)", fontsize=7, loc="left")
         ax.tick_params(labelsize=6)
         ax.spines[["top", "right"]].set_visible(False)
-    fig.tight_layout()
+
+    fig.subplots_adjust(left=0.08, right=0.98, top=0.82, bottom=0.18, wspace=0.25)
     return fig
