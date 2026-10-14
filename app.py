@@ -34,7 +34,7 @@ from utils.processing import (
     build,
     kpi_pair,
 )
-from utils.charts import chart_bar, scatter_ttqt_mbnt
+from utils.charts import chart_bar as _chart_bar, scatter_ttqt_mbnt
 from utils.ai_bot import generate_professional_report, chat_with_data
 
 load_dotenv()
@@ -54,12 +54,27 @@ def _sid():
     return session["sid"]
 
 
+def chart_bar(data, *args, **kwargs):
+    """Limit chart rendering to a manageable number of categories.
+
+    KPI/ranking tables remain based on the full dataset; only the image is capped
+    to avoid Matplotlib layout timeouts on very large customer lists.
+    """
+    if isinstance(data, pd.DataFrame) and len(data) > 30:
+        data = data.head(30).copy()
+    return _chart_bar(data, *args, **kwargs)
+
+
 def fig_to_base64(fig) -> str:
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close(fig)
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode("utf-8")
+    try:
+        # Avoid bbox_inches='tight': it triggers an additional full layout pass
+        # and can be expensive for charts with many labels on small Render instances.
+        fig.savefig(buf, format="png", facecolor=fig.get_facecolor(), dpi=90)
+        buf.seek(0)
+        return base64.b64encode(buf.read()).decode("utf-8")
+    finally:
+        plt.close(fig)
 
 
 def read_df(file_storage):
