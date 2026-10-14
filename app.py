@@ -63,14 +63,41 @@ def fig_to_base64(fig) -> str:
 
 
 def read_df(file_storage):
-    if file_storage is None or file_storage.filename == "":
+    """Read uploaded tabular data without copying the entire upload into RAM."""
+    if file_storage is None or not file_storage.filename:
         return None
-    name = file_storage.filename.lower()
-    data = file_storage.read()
-    bio = io.BytesIO(data)
-    if name.endswith(".csv"):
-        return pd.read_csv(bio)
-    return pd.read_excel(bio)
+
+    filename = secure_filename(file_storage.filename) or "uploaded_file"
+    name = filename.lower()
+    stream = file_storage.stream
+    stream.seek(0)
+
+    try:
+        if name.endswith(".csv"):
+            try:
+                df = pd.read_csv(stream, encoding="utf-8-sig", low_memory=False)
+            except UnicodeDecodeError:
+                stream.seek(0)
+                df = pd.read_csv(stream, encoding="cp1258", low_memory=False)
+        elif name.endswith((".xlsx", ".xlsm")):
+            # pandas/openpyxl reads the worksheet in read-only mode internally.
+            # Passing the upload stream directly avoids an extra full-file bytes copy.
+            df = pd.read_excel(stream, engine="openpyxl")
+        elif name.endswith(".xls"):
+            df = pd.read_excel(stream, engine="xlrd")
+        else:
+            raise ValueError(
+                f"Định dạng file không hỗ trợ: {filename}. "
+                "Vui lòng dùng CSV, XLS, XLSX hoặc XLSM."
+            )
+
+        if df.empty and len(df.columns) == 0:
+            raise ValueError(f"File {filename} không có bảng dữ liệu.")
+
+        df.columns = [str(col).strip() for col in df.columns]
+        return df
+    except Exception as exc:
+        raise ValueError(f"Không đọc được file '{filename}': {exc}") from exc
 
 
 def read_external_text(file_storage) -> str:
@@ -172,6 +199,12 @@ def build_report(df, dall, qall, mm, tt, phong, d_from, d_to):
     return "\n".join(R)
 
 
+@app.errorhandler(413)
+def request_entity_too_large(_error):
+    flash("Tổng dung lượng file upload vượt giới hạn 80 MB.", "error")
+    return redirect(url_for("index")), 413
+
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template(
@@ -204,6 +237,10 @@ def run_analysis():
         d_to = datetime.strptime(d_to_s, "%Y-%m-%d").date()
     except ValueError:
         flash("Định dạng ngày không hợp lệ.", "error")
+        return redirect(url_for("index"))
+
+    if d_from > d_to:
+        flash("Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc.", "error")
         return redirect(url_for("index"))
 
     try:
