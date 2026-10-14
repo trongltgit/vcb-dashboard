@@ -8,9 +8,6 @@ import os
 from datetime import date, datetime
 from functools import wraps
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
@@ -34,7 +31,6 @@ from utils.processing import (
     build,
     kpi_pair,
 )
-from utils.charts import chart_bar as _chart_bar, scatter_ttqt_mbnt
 from utils.ai_bot import generate_professional_report, chat_with_data
 
 load_dotenv()
@@ -52,33 +48,6 @@ def _sid():
     if "sid" not in session:
         session["sid"] = os.urandom(8).hex()
     return session["sid"]
-
-
-def chart_bar(data, *args, **kwargs):
-    """Giới hạn tối đa số lượng item vẽ biểu đồ để tránh tràn RAM (SIGKILL) trên Render Free."""
-    try:
-        if isinstance(data, pd.DataFrame) and not data.empty:
-            if len(data) > 10:
-                data = data.head(10).copy()
-    except Exception:
-        pass
-    return _chart_bar(data, *args, **kwargs)
-
-
-def fig_to_base64(fig) -> str:
-    """An toàn hóa quá trình vẽ biểu đồ, tránh làm sập server khi gặp giới hạn RAM trên Render."""
-    if fig is None:
-        return ""
-    buf = io.BytesIO()
-    try:
-        fig.savefig(buf, format="png", facecolor=fig.get_facecolor(), dpi=80)
-        buf.seek(0)
-        return base64.b64encode(buf.read()).decode("utf-8")
-    except Exception as e:
-        print(f"Chart render warning: {e}")
-        return ""
-    finally:
-        plt.close(fig)
 
 
 def read_df(file_storage):
@@ -268,38 +237,21 @@ def run_analysis():
         ext_text = read_external_text(ext_f)
         report_text = build_report(df, dall, qall, mm, tt, phong, d_from, d_to)
 
-        # Pre-generate charts as base64
-        charts = {}
+        # Vô hiệu hóa việc vẽ biểu đồ để tránh lỗi SIGKILL trên Render Free
+        charts = {
+            "mbnt_top_ds": "", "mbnt_bot_ds": "", "mbnt_top_ln": "", "mbnt_bot_ln": "",
+            "ttqt_top": "", "ttqt_bot": "", "ttqt_xk_top": "", "ttqt_xk_bot": "",
+            "ttqt_nk_top": "", "ttqt_nk_bot": "", "scatter": ""
+        }
+
         d_filt, _ = filt(dall, phong, d_from, d_to)
+        q_filt, _ = filt(qall, phong, d_from, d_to)
+        
         cif_mbnt = build(d_filt, ["ds", "ln"])
         TDS, BDS = kpi_pair(cif_mbnt, "DS")
         TLN, BLN = kpi_pair(cif_mbnt, "LN")
-        charts["mbnt_top_ds"] = fig_to_base64(chart_bar(TDS, "TOP 20% – DOANH SỐ MBNT", "USD", "#2563EB", True, note))
-        charts["mbnt_bot_ds"] = fig_to_base64(chart_bar(BDS, "BOT 10% – DOANH SỐ MBNT", "USD", "#F97316", False, note))
-        charts["mbnt_top_ln"] = fig_to_base64(chart_bar(TLN, "TOP 20% – LỢI NHUẬN MBNT", "VND", "#16A34A", True, note))
-        charts["mbnt_bot_ln"] = fig_to_base64(chart_bar(BLN, "BOT 10% – LỢI NHUẬN MBNT", "VND", "#7C3AED", False, note))
-
-        q_filt, _ = filt(qall, phong, d_from, d_to)
         cq = build(q_filt, ["xk", "nk", "xnk", "ds"])
         TQ, BQ = kpi_pair(cq, "DS")
-        charts["ttqt_top"] = fig_to_base64(chart_bar(TQ, "TOP 20% – DOANH SỐ TTQT", "USD", "#0EA5E9", True, note))
-        charts["ttqt_bot"] = fig_to_base64(chart_bar(BQ, "BOT 10% – DOANH SỐ TTQT", "USD", "#EF4444", False, note))
-
-        if "XK" in cq.columns:
-            TX, BX = kpi_pair(cq[cq.XK > 0] if len(cq) else cq, "XK")
-            if not TX.empty:
-                charts["ttqt_xk_top"] = fig_to_base64(chart_bar(TX, "TOP 20% – TTQT XK", "USD", "#0EA5E9", True))
-            if not BX.empty:
-                charts["ttqt_xk_bot"] = fig_to_base64(chart_bar(BX, "BOT 10% – TTQT XK", "USD", "#EF4444", False))
-        if "NK" in cq.columns:
-            TN, BN = kpi_pair(cq[cq.NK > 0] if len(cq) else cq, "NK")
-            if not TN.empty:
-                charts["ttqt_nk_top"] = fig_to_base64(chart_bar(TN, "TOP 20% – TTQT NK", "USD", "#14B8A6", True))
-            if not BN.empty:
-                charts["ttqt_nk_bot"] = fig_to_base64(chart_bar(BN, "BOT 10% – TTQT NK", "USD", "#A855F7", False))
-
-        if len(df):
-            charts["scatter"] = fig_to_base64(scatter_ttqt_mbnt(df))
 
         # Group summary for relationship
         groups = {}
