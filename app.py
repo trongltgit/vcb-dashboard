@@ -55,13 +55,14 @@ def _sid():
 
 
 def chart_bar(data, *args, **kwargs):
-    """Limit chart rendering to a manageable number of categories.
-
-    KPI/ranking tables remain based on the full dataset; only the image is capped
-    to avoid Matplotlib layout timeouts on very large customer lists.
-    """
-    if isinstance(data, pd.DataFrame) and len(data) > 30:
-        data = data.head(30).copy()
+    """Giới hạn tối đa số lượng item vẽ biểu đồ để tránh tràn RAM (SIGKILL) trên Render Free."""
+    try:
+        if isinstance(data, pd.DataFrame) and not data.empty:
+            # Chỉ lấy tối đa 10 dòng đầu tiên để vẽ chart, tránh quá tải RAM
+            if len(data) > 10:
+                data = data.head(10).copy()
+    except Exception:
+        pass
     return _chart_bar(data, *args, **kwargs)
 
 
