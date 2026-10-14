@@ -237,7 +237,7 @@ def run_analysis():
         ext_text = read_external_text(ext_f)
         report_text = build_report(df, dall, qall, mm, tt, phong, d_from, d_to)
 
-        # Vô hiệu hóa việc vẽ biểu đồ để tránh lỗi SIGKILL trên Render Free
+        # Vô hiệu hóa vẽ biểu đồ để tránh hoàn toàn lỗi SIGKILL trên Render Free
         charts = {
             "mbnt_top_ds": "", "mbnt_bot_ds": "", "mbnt_top_ln": "", "mbnt_bot_ln": "",
             "ttqt_top": "", "ttqt_bot": "", "ttqt_xk_top": "", "ttqt_xk_bot": "",
@@ -253,22 +253,37 @@ def run_analysis():
         cq = build(q_filt, ["xk", "nk", "xnk", "ds"])
         TQ, BQ = kpi_pair(cq, "DS")
 
-        # Group summary for relationship
+        # Group summary for relationship (đã bọc an toàn chống tràn RAM trên Pandas/Python 3.14)
         groups = {}
-        for side, X, Y in [("XK → BUY", "XK", "BUY"), ("NK → SELL", "NK", "SELL")]:
-            dside = df[df[X] > 0].copy()
-            if dside.empty:
-                continue
-            r = dside[Y] / dside[X]
-            lab = ["1. Không GD MBNT", "2. <30%", "3. 30-80%", "4. 80-120%", "5. >120%"]
-            dside["Nhom"] = np.select([dside[Y] == 0, r < 0.3, r < 0.8, r <= 1.2], lab[:4], default=lab[4])
-            summary = (
-                dside.groupby("Nhom")
-                .agg(So_cty=("Ten", "size"), Tong_X=(X, "sum"), Tong_Y=(Y, "sum"))
-                .reset_index()
-            )
-            summary["Y/X_%"] = (summary.Tong_Y / summary.Tong_X * 100).round(1)
-            groups[side] = summary.to_dict(orient="records")
+        try:
+            for side, X, Y in [("XK → BUY", "XK", "BUY"), ("NK → SELL", "NK", "SELL")]:
+                if X not in df.columns or Y not in df.columns:
+                    continue
+                dside = df[pd.to_numeric(df[X], errors="coerce").fillna(0) > 0].copy()
+                if dside.empty:
+                    continue
+                
+                dside[X] = pd.to_numeric(dside[X], errors="coerce").fillna(0)
+                dside[Y] = pd.to_numeric(dside[Y], errors="coerce").fillna(0)
+                
+                r = dside[Y] / dside[X].replace(0, np.nan)
+                lab = ["1. Không GD MBNT", "2. <30%", "3. 30-80%", "4. 80-120%", "5. >120%"]
+                dside["Nhom"] = np.select(
+                    [dside[Y] == 0, r < 0.3, r < 0.8, r <= 1.2], 
+                    lab[:4], 
+                    default=lab[4]
+                )
+                
+                summary = (
+                    dside.groupby("Nhom", observed=True)
+                    .agg(So_cty=("Ten", "size"), Tong_X=(X, "sum"), Tong_Y=(Y, "sum"))
+                    .reset_index()
+                )
+                summary["Y/X_%"] = np.where(summary["Tong_X"] > 0, (summary["Tong_Y"] / summary["Tong_X"] * 100).round(1), 0)
+                groups[side] = summary.to_dict(orient="records")
+        except Exception as group_err:
+            print(f"Group summary warning: {group_err}")
+            groups = {}
 
         metrics = {
             "mbnt_ds": float(d_filt.ds.sum()) if len(d_filt) else 0,
