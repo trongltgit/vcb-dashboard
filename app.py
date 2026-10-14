@@ -58,7 +58,6 @@ def chart_bar(data, *args, **kwargs):
     """Giới hạn tối đa số lượng item vẽ biểu đồ để tránh tràn RAM (SIGKILL) trên Render Free."""
     try:
         if isinstance(data, pd.DataFrame) and not data.empty:
-            # Chỉ lấy tối đa 10 dòng đầu tiên để vẽ chart, tránh quá tải RAM
             if len(data) > 10:
                 data = data.head(10).copy()
     except Exception:
@@ -67,13 +66,17 @@ def chart_bar(data, *args, **kwargs):
 
 
 def fig_to_base64(fig) -> str:
+    """An toàn hóa quá trình vẽ biểu đồ, tránh làm sập server khi gặp giới hạn RAM trên Render."""
+    if fig is None:
+        return ""
     buf = io.BytesIO()
     try:
-        # Avoid bbox_inches='tight': it triggers an additional full layout pass
-        # and can be expensive for charts with many labels on small Render instances.
-        fig.savefig(buf, format="png", facecolor=fig.get_facecolor(), dpi=90)
+        fig.savefig(buf, format="png", facecolor=fig.get_facecolor(), dpi=80)
         buf.seek(0)
         return base64.b64encode(buf.read()).decode("utf-8")
+    except Exception as e:
+        print(f"Chart render warning: {e}")
+        return ""
     finally:
         plt.close(fig)
 
@@ -96,8 +99,6 @@ def read_df(file_storage):
                 stream.seek(0)
                 df = pd.read_csv(stream, encoding="cp1258", low_memory=False)
         elif name.endswith((".xlsx", ".xlsm")):
-            # pandas/openpyxl reads the worksheet in read-only mode internally.
-            # Passing the upload stream directly avoids an extra full-file bytes copy.
             df = pd.read_excel(stream, engine="openpyxl")
         elif name.endswith(".xls"):
             df = pd.read_excel(stream, engine="xlrd")
