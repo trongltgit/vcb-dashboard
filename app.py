@@ -229,15 +229,19 @@ def run_analysis():
         flash("Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc.", "error")
         return redirect(url_for("index"))
 
+    # BỌC TOÀN BỘ KHỐI XỬ LÝ NẶNG BẰNG TRY-EXCEPT ĐỂ CHỐNG SẬP WORKER (SIGKILL)
     try:
         mbnt_raw = read_df(mbnt_f)
         ttqt_raw = read_df(ttqt_f)
+        
+        if mbnt_raw is None or ttqt_raw is None:
+            raise ValueError("Không đọc được nội dung từ file dữ liệu.")
+
         dall, qall, SA, SQ = prepare_all(mbnt_raw, ttqt_raw)
         df, mm, tt, note = build_customer_df(dall, qall, phong, d_from, d_to)
         ext_text = read_external_text(ext_f)
         report_text = build_report(df, dall, qall, mm, tt, phong, d_from, d_to)
 
-        # Vô hiệu hóa vẽ biểu đồ để tránh hoàn toàn lỗi SIGKILL trên Render Free
         charts = {
             "mbnt_top_ds": "", "mbnt_bot_ds": "", "mbnt_top_ln": "", "mbnt_bot_ln": "",
             "ttqt_top": "", "ttqt_bot": "", "ttqt_xk_top": "", "ttqt_xk_bot": "",
@@ -253,7 +257,6 @@ def run_analysis():
         cq = build(q_filt, ["xk", "nk", "xnk", "ds"])
         TQ, BQ = kpi_pair(cq, "DS")
 
-        # Group summary for relationship (đã bọc an toàn chống tràn RAM trên Pandas/Python 3.14)
         groups = {}
         try:
             for side, X, Y in [("XK → BUY", "XK", "BUY"), ("NK → SELL", "NK", "SELL")]:
@@ -295,7 +298,6 @@ def run_analysis():
             "ttqt_nk": float(q_filt.nk.sum()) if len(q_filt) else 0,
         }
 
-        # Store tables as CSV strings for download
         df_csv = df.to_csv(index=True).encode("utf-8-sig")
         tds_html = TDS.drop(columns=["Key"], errors="ignore").to_html(classes="table", index=False) if not TDS.empty else ""
         bds_html = BDS.drop(columns=["Key"], errors="ignore").to_html(classes="table", index=False) if not BDS.empty else ""
@@ -318,7 +320,7 @@ def run_analysis():
         }
         flash(note, "success")
     except Exception as e:
-        flash(f"Lỗi xử lý dữ liệu: {e}", "error")
+        flash(f"Lỗi xử lý dữ liệu hoặc vượt quá giới hạn bộ nhớ server: {e}", "error")
         return redirect(url_for("index"))
 
     return redirect(url_for("dashboard"))
