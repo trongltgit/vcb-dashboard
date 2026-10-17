@@ -7,19 +7,20 @@
       {{ data.phong or 'VCB HCM' }} · {{ data.d_from }} → {{ data.d_to }}
     </p>
   </div>
-  <div class="flex gap-2">
+  <div class="flex flex-wrap gap-2">
     <a href="{{ url_for('index') }}" class="text-sm px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50">← Upload lại</a>
     <a href="{{ url_for('export_csv') }}" class="text-sm px-3 py-1.5 rounded-lg bg-slate-800 text-white hover:bg-slate-700">⬇️ CSV</a>
-    <a href="{{ url_for('export_report') }}" class="text-sm px-3 py-1.5 rounded-lg bg-slate-800 text-white hover:bg-slate-700">⬇️ Báo cáo</a>
+    <a href="{{ url_for('export_report') }}" class="text-sm px-3 py-1.5 rounded-lg bg-slate-800 text-white hover:bg-slate-700">⬇️ Báo cáo TXT</a>
+    <a href="{{ url_for('export_pdf') }}" class="text-sm px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700">📄 Export PDF</a>
   </div>
 </div>
 
-<!-- Tabs -->
 <div x-data="{ tab: 'mbnt' }" class="space-y-4">
   <div class="flex flex-wrap gap-1 border-b border-slate-200 pb-1">
     <template x-for="t in [
       {id:'mbnt', label:'📈 KPI MBNT'},
       {id:'ttqt', label:'🌍 KPI TTQT'},
+      {id:'plan', label:'🎯 Kế hoạch'},
       {id:'rel', label:'🔗 Quan hệ'},
       {id:'report', label:'📋 Báo cáo'},
       {id:'ai', label:'🤖 AI Bot'},
@@ -34,7 +35,7 @@
 
   <!-- MBNT -->
   <div x-show="tab === 'mbnt'" class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-    <h2 class="font-semibold text-lg mb-4">Tổng quan MBNT</h2>
+    <h2 class="font-semibold text-lg mb-4">Tổng quan MBNT (Ngoại tệ)</h2>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
       <div class="rounded-lg bg-blue-50 p-3">
         <div class="text-xs text-blue-600">Tổng DS (USD)</div>
@@ -122,6 +123,37 @@
     </div>
   </div>
 
+  <!-- PLAN -->
+  <div x-show="tab === 'plan'" class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm" style="display:none">
+    <h2 class="font-semibold text-lg mb-4">🎯 % hoàn thành kế hoạch (MBNT & TTQT)</h2>
+    {% if data.charts.get('plan_pie') %}
+      <img class="chart-img max-w-4xl mx-auto" src="data:image/png;base64,{{ data.charts.plan_pie }}" alt="Plan completion" />
+    {% else %}
+      <p class="text-slate-500 text-sm">Chưa có biểu đồ kế hoạch. Hãy upload file <strong>KE_HOACH</strong> khi chạy phân tích (cột Metric, KH_Quy, KH_Nam hoặc tương đương).</p>
+    {% endif %}
+    {% if data.plan_rows %}
+    <div class="mt-6 overflow-x-auto">
+      <table class="table">
+        <thead>
+          <tr><th>Chỉ tiêu</th><th>Thực hiện</th><th>KH Quý</th><th>% Quý</th><th>KH Năm</th><th>% Năm</th></tr>
+        </thead>
+        <tbody>
+          {% for r in data.plan_rows %}
+          <tr>
+            <td>{{ r.name }}</td>
+            <td>{{ "{:,.1f}".format(r.th) }}</td>
+            <td>{{ "{:,.1f}".format(r.kh_q) }}</td>
+            <td>{{ "{:.1f}%".format(r.pct_q * 100) }}</td>
+            <td>{{ "{:,.1f}".format(r.kh_y) }}</td>
+            <td>{{ "{:.1f}%".format(r.pct_y * 100) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+
   <!-- Relationship -->
   <div x-show="tab === 'rel'" class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm" style="display:none">
     <h2 class="font-semibold text-lg mb-4">Quan hệ DS TTQT ↔ DS MBNT</h2>
@@ -133,9 +165,7 @@
     <div class="overflow-x-auto">
       <table class="table">
         <thead>
-          <tr>
-            <th>Nhóm</th><th>Số CTY</th><th>Tổng X</th><th>Tổng Y</th><th>Y/X %</th>
-          </tr>
+          <tr><th>Nhóm</th><th>Số CTY</th><th>Tổng X</th><th>Tổng Y</th><th>Y/X %</th></tr>
         </thead>
         <tbody>
           {% for r in rows %}
@@ -159,17 +189,11 @@
     <pre class="report bg-slate-50 rounded-lg p-4 border border-slate-100 max-h-[600px] overflow-y-auto">{{ data.report_text }}</pre>
   </div>
 
-  <!-- AI -->
+  <!-- AI – NO API KEY INPUT -->
   <div x-show="tab === 'ai'" class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm" style="display:none"
        x-data="aiBot()">
     <h2 class="font-semibold text-lg mb-2">🤖 AI Bot – Báo cáo chuyên nghiệp (Groq)</h2>
-    <p class="text-sm text-slate-500 mb-4">Llama-3.3-70B · nâng cấp báo cáo + khuyến nghị hành động</p>
-
-    <div class="mb-3">
-      <label class="text-sm text-slate-600">Groq API Key (nếu chưa set env)</label>
-      <input type="password" x-model="apiKey" placeholder="gsk_..."
-             class="mt-1 w-full max-w-md rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-    </div>
+    <p class="text-sm text-slate-500 mb-4">Dùng GROQ_API_KEY đã cấu hình trên server · Llama-3.3-70B</p>
 
     <button @click="generate()" :disabled="loading"
             class="bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg">
@@ -209,7 +233,6 @@
 <script>
 function aiBot() {
   return {
-    apiKey: '',
     loading: false,
     chatLoading: false,
     aiReport: {{ (data.ai_report or '') | tojson }},
@@ -221,7 +244,7 @@ function aiBot() {
         const r = await fetch('{{ url_for("ai_generate") }}', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({api_key: this.apiKey || null})
+          body: JSON.stringify({})
         });
         const j = await r.json();
         if (j.report) this.aiReport = j.report;
@@ -239,7 +262,7 @@ function aiBot() {
         const r = await fetch('{{ url_for("ai_chat") }}', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({message: userMsg, api_key: this.apiKey || null})
+          body: JSON.stringify({message: userMsg})
         });
         const j = await r.json();
         if (j.answer) {
