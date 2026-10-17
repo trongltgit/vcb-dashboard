@@ -1,6 +1,5 @@
 """
-VCB Dashboard – Flask version (thay Streamlit)
-Deploy Render: gunicorn app:app
+VCB Dashboard – Flask version (memory-safe for Render free tier)
 """
 import base64
 import gc
@@ -8,9 +7,6 @@ import io
 import os
 from datetime import date, datetime
 
-import matplotlib
-matplotlib.use("Agg")  # non-interactive backend – important on server
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
@@ -34,7 +30,6 @@ from utils.processing import (
     build,
     kpi_pair,
 )
-from utils.charts import chart_bar, scatter_ttqt_mbnt
 from utils.ai_bot import generate_professional_report, chat_with_data
 
 load_dotenv()
@@ -43,7 +38,9 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "vcb-dashboard-dev-key-change-me")
 app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024  # 80 MB
 
-# In-memory store (single-process / one user at a time friendly on free Render)
+# Set ENABLE_CHARTS=1 in Render env if you want charts (needs more RAM)
+ENABLE_CHARTS = os.environ.get("ENABLE_CHARTS", "0") == "1"
+
 _STORE = {}
 
 
@@ -54,7 +51,6 @@ def _sid():
 
 
 def read_df(file_storage):
-    """Read uploaded tabular data without copying the entire upload into RAM."""
     if file_storage is None or not file_storage.filename:
         return None
 
@@ -128,27 +124,12 @@ def pc(a, b):
     return f"{a/b*100:.0f}%" if b > 0 else "0%"
 
 
-def fig_to_base64(fig) -> str:
-    """Convert matplotlib figure to base64 PNG and free memory immediately."""
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=90)
-    plt.close(fig)
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode("ascii")
-
-
-def safe_html(df, max_rows: int = 40) -> str:
-    """
-    Convert DataFrame to HTML safely.
-    - Limit rows (KPI tables are already small, but protect against surprises)
-    - Force string dtype to avoid deep recursive pandas formatters
-    - Use escape=True
-    """
+def safe_html(df, max_rows: int = 30) -> str:
+    """Very safe HTML conversion – no deep pandas formatters."""
     if df is None or df.empty:
         return ""
     try:
         d = df.drop(columns=["Key"], errors="ignore").head(max_rows).copy()
-        # Convert everything to string – prevents heavy object-dtype formatting
         d = d.astype(str)
         return d.to_html(classes="table table-sm", index=False, escape=True, border=0)
     except Exception as e:
@@ -215,6 +196,53 @@ def build_report(df, dall, qall, mm, tt, phong, d_from, d_to):
     return "\n".join(R)
 
 
+def generate_charts_safe(TDS, BDS, TLN, BLN, TQ, BQ, q_filt, df):
+    """Generate charts only when ENABLE_CHARTS=1. Returns dict of base64 strings."""
+    charts = {
+        "mbnt_top_ds": "", "mbnt_bot_ds": "", "mbnt_top_ln": "", "mbnt_bot_ln": "",
+        "ttqt_top": "", "ttqt_bot": "", "ttqt_xk_top": "", "ttqt_xk_bot": "",
+        "ttqt_nk_top": "", "ttqt_nk_bot": "", "scatter": ""
+    }
+    if not ENABLE_CHARTS:
+        return charts
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from utils.charts import chart_bar, scatter_ttqt_mbnt
+
+        def fig_to_b64(fig):
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", bbox_inches="tight", dpi=72)  # lower dpi
+            plt.close(fig)
+            buf.seek(0)
+            return base64.b64encode(buf.read()).decode("ascii")
+
+        charts["mbnt_top_ds"] = fig_to_b64(chart_bar(TDS, "TOP DS MBNT", "USD", "#0EA5E9", top=True))
+        charts["mbnt_bot_ds"] = fig_to_b64(chart_bar(BDS, "BOT DS MBNT", "USD", "#F97316", top=False))
+        charts["mbnt_top_ln"] = fig_to_b64(chart_bar(TLN, "TOP LN MBNT", "VND", "#22C55E", top=True))
+        charts["mbnt_bot_ln"] = fig_to_b64(chart_bar(BLN, "BOT LN MBNT", "VND", "#EF4444", top=False))
+        charts["ttqt_top"] = fig_to_b64(chart_bar(TQ, "TOP DS TTQT", "USD", "#8B5CF6", top=True))
+        charts["ttqt_bot"] = fig_to_b64(chart_bar(BQ, "BOT DS TTQT", "USD", "#EC4899", top=False))
+
+        cq_xk = build(q_filt, ["xk"]).rename(columns={"XK": "DS"})
+        cq_nk = build(q_filt, ["nk"]).rename(columns={"NK": "DS"})
+        TXK, BXK = kpi_pair(cq_xk, "DS")
+        TNK, BNK = kpi_pair(cq_nk, "DS")
+        charts["ttqt_xk_top"] = fig_to_b64(chart_bar(TXK, "TOP XK", "USD", "#06B6D4", top=True))
+        charts["ttqt_xk_bot"] = fig_to_b64(chart_bar(BXK, "BOT XK", "USD", "#F59E0B", top=False))
+        charts["ttqt_nk_top"] = fig_to_b64(chart_bar(TNK, "TOP NK", "USD", "#10B981", top=True))
+        charts["ttqt_nk_bot"] = fig_to_b64(chart_bar(BNK, "BOT NK", "USD", "#F43F5E", top=False))
+        charts["scatter"] = fig_to_b64(scatter_ttqt_mbnt(df))
+
+        del TXK, BXK, TNK, BNK, cq_xk, cq_nk
+        gc.collect()
+    except Exception as e:
+        print(f"Chart generation skipped/failed: {e}")
+    return charts
+
+
 @app.errorhandler(413)
 def request_entity_too_large(_error):
     flash("Tổng dung lượng file upload vượt giới hạn 80 MB.", "error")
@@ -235,7 +263,6 @@ def index():
 def run_analysis():
     mbnt_f = request.files.get("mbnt")
     ttqt_f = request.files.get("ttqt")
-    plan_f = request.files.get("plan")
     ext_f = request.files.get("external")
     phong = (request.form.get("phong") or "").strip()
     d_from_s = request.form.get("d_from") or "2026-01-01"
@@ -259,7 +286,6 @@ def run_analysis():
         flash("Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc.", "error")
         return redirect(url_for("index"))
 
-    # ===== Heavy processing wrapped to catch OOM / other failures =====
     try:
         mbnt_raw = read_df(mbnt_f)
         ttqt_raw = read_df(ttqt_f)
@@ -268,8 +294,6 @@ def run_analysis():
             raise ValueError("Không đọc được nội dung từ file dữ liệu.")
 
         dall, qall, SA, SQ = prepare_all(mbnt_raw, ttqt_raw)
-
-        # Free raw frames as soon as possible
         del mbnt_raw, ttqt_raw
         gc.collect()
 
@@ -286,56 +310,10 @@ def run_analysis():
         cq = build(q_filt, ["xk", "nk", "xnk", "ds"])
         TQ, BQ = kpi_pair(cq, "DS")
 
-        # ----- Charts (only on small KPI frames) -----
-        charts = {}
-        try:
-            charts["mbnt_top_ds"] = fig_to_base64(
-                chart_bar(TDS, "TOP DS MBNT", "USD", "#0EA5E9", top=True)
-            )
-            charts["mbnt_bot_ds"] = fig_to_base64(
-                chart_bar(BDS, "BOT DS MBNT", "USD", "#F97316", top=False)
-            )
-            charts["mbnt_top_ln"] = fig_to_base64(
-                chart_bar(TLN, "TOP LN MBNT", "VND", "#22C55E", top=True)
-            )
-            charts["mbnt_bot_ln"] = fig_to_base64(
-                chart_bar(BLN, "BOT LN MBNT", "VND", "#EF4444", top=False)
-            )
-            charts["ttqt_top"] = fig_to_base64(
-                chart_bar(TQ, "TOP DS TTQT", "USD", "#8B5CF6", top=True)
-            )
-            charts["ttqt_bot"] = fig_to_base64(
-                chart_bar(BQ, "BOT DS TTQT", "USD", "#EC4899", top=False)
-            )
+        # Charts – skipped by default on free tier
+        charts = generate_charts_safe(TDS, BDS, TLN, BLN, TQ, BQ, q_filt, df)
 
-            # XK / NK splits
-            cq_xk = build(q_filt, ["xk"]).rename(columns={"XK": "DS"})
-            cq_nk = build(q_filt, ["nk"]).rename(columns={"NK": "DS"})
-            TXK, BXK = kpi_pair(cq_xk, "DS")
-            TNK, BNK = kpi_pair(cq_nk, "DS")
-            charts["ttqt_xk_top"] = fig_to_base64(
-                chart_bar(TXK, "TOP XK", "USD", "#06B6D4", top=True)
-            )
-            charts["ttqt_xk_bot"] = fig_to_base64(
-                chart_bar(BXK, "BOT XK", "USD", "#F59E0B", top=False)
-            )
-            charts["ttqt_nk_top"] = fig_to_base64(
-                chart_bar(TNK, "TOP NK", "USD", "#10B981", top=True)
-            )
-            charts["ttqt_nk_bot"] = fig_to_base64(
-                chart_bar(BNK, "BOT NK", "USD", "#F43F5E", top=False)
-            )
-
-            charts["scatter"] = fig_to_base64(scatter_ttqt_mbnt(df))
-        except Exception as chart_err:
-            print(f"Chart generation warning: {chart_err}")
-            charts = {k: "" for k in [
-                "mbnt_top_ds", "mbnt_bot_ds", "mbnt_top_ln", "mbnt_bot_ln",
-                "ttqt_top", "ttqt_bot", "ttqt_xk_top", "ttqt_xk_bot",
-                "ttqt_nk_top", "ttqt_nk_bot", "scatter"
-            ]}
-
-        # ----- Group summary (relationship analysis) -----
+        # Group summary
         groups = {}
         try:
             for side, X, Y in [("XK → BUY", "XK", "BUY"), ("NK → SELL", "NK", "SELL")]:
@@ -344,10 +322,8 @@ def run_analysis():
                 dside = df[pd.to_numeric(df[X], errors="coerce").fillna(0) > 0].copy()
                 if dside.empty:
                     continue
-
                 dside[X] = pd.to_numeric(dside[X], errors="coerce").fillna(0)
                 dside[Y] = pd.to_numeric(dside[Y], errors="coerce").fillna(0)
-
                 r = dside[Y] / dside[X].replace(0, np.nan)
                 lab = ["1. Không GD MBNT", "2. <30%", "3. 30-80%", "4. 80-120%", "5. >120%"]
                 dside["Nhom"] = np.select(
@@ -355,7 +331,6 @@ def run_analysis():
                     lab[:4],
                     default=lab[4],
                 )
-
                 summary = (
                     dside.groupby("Nhom", observed=True)
                     .agg(So_cty=("Ten", "size"), Tong_X=(X, "sum"), Tong_Y=(Y, "sum"))
@@ -382,10 +357,7 @@ def run_analysis():
             "ttqt_nk": float(q_filt.nk.sum()) if len(q_filt) else 0,
         }
 
-        # CSV for download (keep this – needed for export)
         df_csv = df.to_csv(index=True).encode("utf-8-sig")
-
-        # Safe HTML tables
         tds_html = safe_html(TDS)
         bds_html = safe_html(BDS)
 
@@ -405,16 +377,14 @@ def run_analysis():
             "ai_report": None,
             "chat_history": [],
         }
-        flash(note, "success")
+        flash(note + (" (Charts tắt – set ENABLE_CHARTS=1 nếu cần)" if not ENABLE_CHARTS else ""), "success")
 
-        # Aggressive cleanup
+        # Cleanup
         del dall, qall, df, mm, tt, d_filt, q_filt
-        del cif_mbnt, TDS, BDS, TLN, BLN, cq, TQ, BQ
-        del SA, SQ
+        del cif_mbnt, TDS, BDS, TLN, BLN, cq, TQ, BQ, SA, SQ
         gc.collect()
 
     except Exception as e:
-        # Catch everything including potential MemoryError / SystemExit side-effects
         flash(f"Lỗi xử lý dữ liệu hoặc vượt quá giới hạn bộ nhớ server: {e}", "error")
         gc.collect()
         return redirect(url_for("index"))
