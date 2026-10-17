@@ -1,12 +1,12 @@
 """
 AI Report Generator using Groq API.
-Enhances professional analysis reports with LLM insights.
 """
 import os
 from typing import Optional
 
 from groq import Groq
 
+DEFAULT_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
 
 SYSTEM_PROMPT = """Bạn là chuyên gia phân tích ngân hàng tại Vietcombank (VCB), chuyên về doanh số ngoại tệ (MBNT) và thanh toán quốc tế (TTQT/TTTM).
 Nhiệm vụ: Viết báo cáo phân tích chuyên sâu, súc tích, chuyên nghiệp bằng tiếng Việt.
@@ -29,50 +29,58 @@ def generate_professional_report(
     context: str,
     user_question: str = "",
     api_key: Optional[str] = None,
-    model: str = "llama-3.3-70b-versatile",
+    model: str = None,
 ) -> str:
-    """
-    Generate an enhanced professional report from analysis context.
-    """
     client = get_client(api_key)
     if client is None:
-        return "⚠️ Chưa cấu hình GROQ_API_KEY. Vui lòng nhập key ở sidebar hoặc set biến môi trường."
+        return "Chua cau hinh GROQ_API_KEY tren server (Render env)."
 
-    prompt = f"""Dữ liệu phân tích hiện tại:
+    model = model or DEFAULT_MODEL
+    prompt = f"""Du lieu phan tich hien tai:
 
 {context}
 
-{"Câu hỏi / yêu cầu bổ sung của người dùng: " + user_question if user_question else "Hãy viết báo cáo phân tích chuyên sâu đầy đủ dựa trên dữ liệu trên."}
+{"Cau hoi / yeu cau bo sung: " + user_question if user_question else "Hay viet bao cao phan tich chuyen sau day du dua tren du lieu tren."}
 """
-
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ]
     try:
         chat = client.chat.completions.create(
             model=model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
+            messages=messages,
             temperature=0.3,
             max_tokens=4096,
         )
-        return chat.choices[0].message.content or "Không nhận được phản hồi từ AI."
+        return chat.choices[0].message.content or "Khong nhan duoc phan hoi tu AI."
     except Exception as e:
-        return f"❌ Lỗi gọi Groq API: {str(e)}"
+        if "model_not_found" in str(e).lower() and model != "llama-3.1-8b-instant":
+            try:
+                chat = client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=messages,
+                    temperature=0.3,
+                    max_tokens=4096,
+                )
+                return chat.choices[0].message.content or "..."
+            except Exception as e2:
+                return f"Loi goi Groq API: {e2}"
+        return f"Loi goi Groq API: {e}"
 
 
 def chat_with_data(
     messages: list,
     context: str,
     api_key: Optional[str] = None,
-    model: str = "llama-3.3-70b-versatile",
+    model: str = None,
 ) -> str:
-    """Multi-turn chat about the current filtered data."""
     client = get_client(api_key)
     if client is None:
-        return "⚠️ Chưa cấu hình GROQ_API_KEY."
+        return "Chua cau hinh GROQ_API_KEY tren server (Render env)."
 
-    system = SYSTEM_PROMPT + f"\n\n=== DỮ LIỆU HIỆN TẠI ===\n{context}\n========================"
-
+    model = model or DEFAULT_MODEL
+    system = SYSTEM_PROMPT + f"\n\n=== DU LIEU HIEN TAI ===\n{context}\n========================"
     full_messages = [{"role": "system", "content": system}] + messages
 
     try:
@@ -84,4 +92,15 @@ def chat_with_data(
         )
         return chat.choices[0].message.content or "..."
     except Exception as e:
-        return f"❌ Lỗi: {str(e)}"
+        if "model_not_found" in str(e).lower() and model != "llama-3.1-8b-instant":
+            try:
+                chat = client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=full_messages,
+                    temperature=0.4,
+                    max_tokens=2048,
+                )
+                return chat.choices[0].message.content or "..."
+            except Exception as e2:
+                return f"Loi: {e2}"
+        return f"Loi: {e}"
