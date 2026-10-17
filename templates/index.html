@@ -5,15 +5,6 @@
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 sticky top-4">
       <h2 class="text-lg font-semibold mb-4">Bộ lọc & Upload</h2>
       <form action="{{ url_for('run_analysis') }}" method="post" enctype="multipart/form-data" class="space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-slate-600 mb-1">Groq API Key (tùy chọn)</label>
-          <input type="password" name="groq_key" value="{{ groq_key }}"
-                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                 placeholder="gsk_..." />
-          <p class="text-xs text-slate-400 mt-1">console.groq.com – dùng cho AI bot</p>
-        </div>
-
-        <hr class="border-slate-100" />
 
         <div>
           <label class="block text-sm font-medium text-slate-600 mb-1">Data_Raw_MBNT *</label>
@@ -29,6 +20,7 @@
           <label class="block text-sm font-medium text-slate-600 mb-1">KE_HOACH (tùy chọn)</label>
           <input type="file" name="plan" accept=".xlsx,.xls,.csv"
                  class="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-slate-50 file:text-slate-600" />
+          <p class="text-xs text-slate-400 mt-1">File kế hoạch để vẽ pie % hoàn thành MBNT / TTQT</p>
         </div>
         <div>
           <label class="block text-sm font-medium text-slate-600 mb-1">Báo cáo external (PDF/DOCX/TXT)</label>
@@ -98,7 +90,7 @@
         </div>
         <div class="rounded-lg bg-amber-50 border border-amber-100 p-4">
           <div class="font-semibold text-amber-900 mb-1">AI Bot (Groq)</div>
-          <p class="text-amber-800/80">Báo cáo chuyên sâu + chat với dữ liệu</p>
+          <p class="text-amber-800/80">Báo cáo chuyên sâu + chat với dữ liệu (key đã cấu hình server)</p>
         </div>
       </div>
 
@@ -107,6 +99,7 @@
         <ul class="list-disc list-inside space-y-1">
           <li>MBNT: Ngày giao dịch, Ma_CIF, Ten_Khach_Hang, Phong_Ban, Chieu_NH, DS_Quy_USD, Loi_Nhuan_VND…</li>
           <li>TTQT: Ngay_GD, Ma_CIF, Ten_Khach_Hang, Phong_Ban, DS XK / NK / XNK</li>
+          <li>KE_HOACH (tùy chọn): cột Metric / Chi_tieu, KH_Quy, KH_Nam (hoặc tương đương)</li>
         </ul>
       </div>
     </div>
