@@ -1,15 +1,15 @@
 """
-Core data processing logic ported from Excel Python (Dashboard!Z1, Z2, Z3).
-Keeps the same normalization, grouping, filtering, and KPI logic.
+Core processing – port from Excel Python (Z1 / Dashboard / CUSTOMER_*).
+Dynamic rows: no fixed 150000 limit; uses full uploaded DataFrame.
+TTQT: if XNK (col G) != 0 -> use XNK only; else XK + NK.
 """
 import re
 import unicodedata as ud
-from typing import Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
 
-# ====== Constants from original code ======
 TOP_PCT = 0.20
 BOT_PCT = 0.10
 SHOW_N = 10
@@ -19,7 +19,7 @@ MAXLINES = 2
 
 LG = r"\b(cong ty|cty|tnhh|co phan|cp|ctcp|mtv|mot thanh vien|1 thanh vien|jsc|ltd|limited|company|corp|inc|llc)\b"
 KW = r"\b(cong ty|ctcp|tnhh|cp|co phan|tap doan|tct|dntn|doanh nghiep|htx|ngan hang|chi nhanh|trung tam|nha may|ltd|corp|inc|llc|jsc|company|group|limited|viet nam|vietnam|thuong mai|san xuat|dau tu|xay dung|van tai|xuat nhap khau|hkd|ho kinh doanh)\b"
-KEEP = set()  # can be extended
+KEEP = set()
 
 
 def N(s):
@@ -106,7 +106,6 @@ def VAY(s: pd.Series) -> np.ndarray:
 
 
 def group_keys(d: pd.DataFrame) -> pd.DataFrame:
-    """Union-find style customer grouping by CIF + normalized name."""
     d = d.copy()
     d["_n"] = d.ten.map(N)
     P = {}
@@ -142,7 +141,7 @@ def LOC(d: pd.DataFrame, p) -> Tuple[pd.DataFrame, str]:
             h = next((n for n in ns if C(n) == k.replace(" ", "")), None)
         if h is not None:
             return d[d[c] == h], ""
-    return d.iloc[0:0], f"Không tìm thấy phòng/chi nhánh '{p}'"
+    return d.iloc[0:0], f"Khong tim thay phong/CN '{p}'"
 
 
 def filt(src: pd.DataFrame, p, a, b) -> Tuple[pd.DataFrame, str]:
@@ -167,39 +166,35 @@ def CN(s: pd.Series) -> np.ndarray:
     return s.map(u).to_numpy()
 
 
+def _col(df, names, idx):
+    for n in names:
+        if n in df.columns:
+            return df[n]
+    if idx < len(df.columns):
+        return df.iloc[:, idx]
+    return pd.Series([None] * len(df))
+
+
 def load_mbnt(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Parse Data_Raw_MBNT.
-    Columns expected (0-index): 
-    0 Ngày khởi tạo, 1 Ngày giao dịch, 2 Ngày giá trị, 3 Ma_CIF, 4 Ten_Khach_Hang,
-    5 Phong_Ban, 6 Mã CN ghi nhận, ... 12 Chieu_NH, 19 DS_Quy_USD, 20 Loi_Nhuan_VND,
-    22 Nguon_Mua_KH, 23 Muc_Dich_KH
+    Columns (name or 0-index fallback):
+    1 Ngay GD, 3 Ma_CIF, 4 Ten, 5 Phong, 6 Ma CN,
+    12 Chieu_NH, 19 DS_Quy_USD, 20 Loi_Nhuan_VND, 22 Nguon, 23 Muc_Dich
     """
-    # Make column access robust by name if possible
-    cols = list(df.columns)
-    # Prefer name-based if available
-    def col(name_candidates, idx):
-        for n in name_candidates:
-            if n in df.columns:
-                return df[n]
-        if idx < len(cols):
-            return df.iloc[:, idx]
-        return pd.Series([None] * len(df))
-
-    ngay = dates(col(["Ngày giao dịch", "Ngay_GD", "ngay"], 1))
-    cif = T(col(["Ma_CIF", "CIF"], 3)).str.replace(r"\.0$", "", regex=True)
-    ten = T(col(["Ten_Khach_Hang", "Tên khách hàng"], 4))
-    ph = T(col(["Phong_Ban", "Phòng ban"], 5))
-    cn = T(col(["Mã CN ghi nhận", "Ma_CN"], 6))
-    side = T(col(["Chieu_NH", "Chiều NH"], 12)).str.upper()
-    nguon = T(col(["Nguon_Mua_KH", "Nguồn mua KH"], 22))
-    mucdich = T(col(["Muc_Dich_KH", "Mục đích KH"], 23))
-    ds = num(col(["DS_Quy_USD", "DS"], 19))
-    ln = num(col(["Loi_Nhuan_VND", "LN"], 20))
+    ngay = dates(_col(df, ["Ngày giao dịch", "Ngay_GD", "ngay"], 1))
+    cif = T(_col(df, ["Ma_CIF", "CIF"], 3)).str.replace(r"\.0$", "", regex=True)
+    ten = T(_col(df, ["Ten_Khach_Hang", "Tên khách hàng"], 4))
+    ph = T(_col(df, ["Phong_Ban", "Phòng ban"], 5))
+    cn = T(_col(df, ["Mã CN ghi nhận", "Ma_CN"], 6))
+    side = T(_col(df, ["Chieu_NH", "Chiều NH"], 12)).str.upper()
+    nguon = T(_col(df, ["Nguon_Mua_KH", "Nguồn mua KH"], 22))
+    mucdich = T(_col(df, ["Muc_Dich_KH", "Mục đích KH"], 23))
+    ds = num(_col(df, ["DS_Quy_USD", "DS"], 19))
+    ln = num(_col(df, ["Loi_Nhuan_VND", "LN"], 20))
 
     d = pd.DataFrame({
         "ngay": ngay, "cif": cif, "ten": ten, "ph": ph, "cn": cn,
-        "side": side, "nguon": nguon, "mucdich": mucdich, "ds": ds, "ln": ln
+        "side": side, "nguon": nguon, "mucdich": mucdich, "ds": ds, "ln": ln,
     })
     d = d[~(d.ngay.isna() & (d.cif == "") & (d.ten == "") & (d.ds == 0) & (d.ln == 0))].reset_index(drop=True)
     d["vw"] = VAY(d.nguon)
@@ -210,40 +205,31 @@ def load_mbnt(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_ttqt(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Parse Data_Raw_TTQT_TTTM.
-    A ngày | B CIF | C tên | D phòng | E XK | F NK | G XNK
+    A Ngay | B CIF | C Ten | D Phong | E XK | F NK | G XNK
+    Rule: if G (XNK) != 0 -> use XNK only (xk=0, nk=0, xnk=G)
+          else -> xk=E, nk=F, xnk=0
     """
-    def col(name_candidates, idx):
-        for n in name_candidates:
-            if n in df.columns:
-                return df[n]
-        if idx < len(df.columns):
-            return df.iloc[:, idx]
-        return pd.Series([None] * len(df))
-
-    ngay = dates(col(["Ngay_GD", "Ngày GD", "ngay"], 0))
-    cif = T(col(["Ma_CIF", "CIF"], 1)).str.replace(r"\.0$", "", regex=True)
-    ten = T(col(["Ten_Khach_Hang", "Tên"], 2))
-    ph = T(col(["Phong_Ban", "Phòng"], 3))
-    e1 = num(col(["DS_Quy_USD (XK)", "XK"], 4))
-    f1 = num(col(["DS_Quy_USD (NK)", "NK"], 5))
-    g1 = num(col(["DS_Quy_USD (XNK)", "XNK"], 6))
+    ngay = dates(_col(df, ["Ngay_GD", "Ngày GD", "ngay"], 0))
+    cif = T(_col(df, ["Ma_CIF", "CIF"], 1)).str.replace(r"\.0$", "", regex=True)
+    ten = T(_col(df, ["Ten_Khach_Hang", "Tên"], 2))
+    ph = T(_col(df, ["Phong_Ban", "Phòng"], 3))
+    e1 = num(_col(df, ["DS_Quy_USD (XK)", "XK"], 4))
+    f1 = num(_col(df, ["DS_Quy_USD (NK)", "NK"], 5))
+    g1 = num(_col(df, ["DS_Quy_USD (XNK)", "XNK"], 6))
     hg = g1 != 0
 
     q = pd.DataFrame({
         "ngay": ngay, "cif": cif, "ten": ten, "ph": ph,
-        "xk": e1.where(~hg, 0), "nk": f1.where(~hg, 0), "xnk": g1.where(hg, 0)
+        "xk": e1.where(~hg, 0),
+        "nk": f1.where(~hg, 0),
+        "xnk": g1.where(hg, 0),
     })
     q["ds"] = q.xk + q.nk + q.xnk
     q = q[~(q.ngay.isna() & (q.cif == "") & (q.ten == "") & (q.ds == 0))].reset_index(drop=True)
     return q
 
 
-def build_customer_df(dall: pd.DataFrame, qall: pd.DataFrame, phong: str, d1, d2) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, str]:
-    """
-    Full pipeline from Z3: filter, remove personal customers, build df with BUY/SELL/XK/NK etc.
-    Returns: df (main analysis), mm (filtered MBNT), tt (filtered TTQT), note
-    """
+def build_customer_df(dall, qall, phong, d1, d2):
     mf, note = filt(dall, phong, d1, d2)
     tf, _ = filt(qall, phong, d1, d2)
 
@@ -270,7 +256,7 @@ def build_customer_df(dall: pd.DataFrame, qall: pd.DataFrame, phong: str, d1, d2
     nmx = pd.concat([mm[["gj", "ten", "cif"]], tt[["gj", "ten", "cif"]]])
     df["Ten"] = df.index.map(
         nmx[nmx.ten != ""].drop_duplicates("gj").set_index("gj").ten
-    ).fillna("(không tên)")
+    ).fillna("(khong ten)")
     df["CIF"] = df.index.map(
         nmx[nmx.cif != ""].drop_duplicates("gj").set_index("gj").cif
     ).fillna("")
@@ -278,14 +264,17 @@ def build_customer_df(dall: pd.DataFrame, qall: pd.DataFrame, phong: str, d1, d2
     df["TQ"] = df.XK + df.NK + df.XNK
     df["QH"] = np.select(
         [(df.MB > 0) & (df.TQ > 0), (df.MB > 0) & (df.TQ <= 0), (df.MB <= 0) & (df.TQ > 0)],
-        ["MBNT+TTQT", "Chỉ MBNT", "Chỉ TTQT"],
-        default="Khác",
+        ["MBNT+TTQT", "Chi MBNT", "Chi TTQT"],
+        default="Khac",
     )
-    return df, mm, tt, note or f"OK: {len(df):,} DN (loại {nex:,} cá nhân)"
+    return df, mm, tt, note or f"OK: {len(df):,} DN (loai {nex:,} ca nhan)"
 
 
 def build(d: pd.DataFrame, cols: list) -> pd.DataFrame:
-    x = d.assign(_c=d.cif.replace("", np.nan), _t=d._n.replace("", np.nan) if "_n" in d.columns else d.ten.map(N))
+    x = d.assign(
+        _c=d.cif.replace("", np.nan),
+        _t=d._n.replace("", np.nan) if "_n" in d.columns else d.ten.map(N),
+    )
     cif = (
         x.groupby("g")
         .agg(
@@ -338,13 +327,11 @@ def kpi_pair(cif: pd.DataFrame, c: str):
 
 
 def prepare_all(mbnt_raw: pd.DataFrame, ttqt_raw: pd.DataFrame):
-    """Full Z1 pipeline: load + group + joint keys."""
     d = load_mbnt(mbnt_raw)
     q = load_ttqt(ttqt_raw)
     dall = group_keys(d)
     qall = group_keys(q)
 
-    # Joint grouping key gj
     z = pd.concat([dall[["cif", "ten"]], qall[["cif", "ten"]]], ignore_index=True)
     uu = {x: NKY(x) for x in z.ten.unique()}
     z["ten"] = z.ten.map(uu)
