@@ -10,7 +10,20 @@
     .table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
     .table th, .table td { border: 1px solid #e5e7eb; padding: 0.4rem 0.6rem; text-align: left; }
     .table th { background: #f3f4f6; }
-    .chart-img { max-width: 100%; height: auto; border-radius: 0.5rem; background: #fff; }
+    .chart-img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 0.5rem;
+      background: #fff;
+      transition: transform 0.25s ease, box-shadow 0.25s ease;
+      cursor: zoom-in;
+    }
+    .chart-img:hover {
+      transform: scale(1.35);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+      z-index: 50;
+      position: relative;
+    }
     pre.report { white-space: pre-wrap; font-size: 0.85rem; line-height: 1.5; }
   </style>
   {% block head %}{% endblock %}
