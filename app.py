@@ -1,14 +1,16 @@
 """
-VCB Dashboard – Flask (memory-safe for Render free tier)
+VCB Dashboard – Flask (Render free-tier safe)
 - No Groq key on frontend (uses GROQ_API_KEY env only)
-- Plan-completion pie charts (MBNT / TTQT vs KE_HOACH)
-- Export full report to PDF
+- Plan-completion 3x6 pie gauges (exact Excel KE_HOACH logic)
+- PDF export (Unicode-safe)
+- Optional bar/scatter charts via ENABLE_CHARTS=1
 """
 import base64
 import gc
 import io
 import os
 import re
+import unicodedata as ud
 from datetime import date, datetime
 
 import numpy as np
@@ -44,6 +46,7 @@ app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024  # 80 MB
 
 # Set ENABLE_CHARTS=1 on Render if you have enough RAM for bar/scatter charts
 ENABLE_CHARTS = os.environ.get("ENABLE_CHARTS", "0") == "1"
+PLAN_YEAR = int(os.environ.get("PLAN_YEAR", "2026"))
 
 _STORE = {}
 
@@ -54,7 +57,7 @@ def _sid():
     return session["sid"]
 
 
-# ───────────────────────── helpers ─────────────────────────
+# ───────────────────────── IO helpers ─────────────────────────
 
 def read_df(file_storage):
     if file_storage is None or not file_storage.filename:
@@ -78,17 +81,17 @@ def read_df(file_storage):
             df = pd.read_excel(stream, engine="xlrd")
         else:
             raise ValueError(
-                f"Định dạng file không hỗ trợ: {filename}. "
-                "Vui lòng dùng CSV, XLS, XLSX hoặc XLSM."
+                f"Dinh dang file khong ho tro: {filename}. "
+                "Vui long dung CSV, XLS, XLSX hoac XLSM."
             )
 
         if df.empty and len(df.columns) == 0:
-            raise ValueError(f"File {filename} không có bảng dữ liệu.")
+            raise ValueError(f"File {filename} khong co bang du lieu.")
 
         df.columns = [str(col).strip() for col in df.columns]
         return df
     except Exception as exc:
-        raise ValueError(f"Không đọc được file '{filename}': {exc}") from exc
+        raise ValueError(f"Khong doc duoc file '{filename}': {exc}") from exc
 
 
 def read_external_text(file_storage) -> str:
@@ -104,25 +107,25 @@ def read_external_text(file_storage) -> str:
             reader = PdfReader(io.BytesIO(data))
             return "\n".join(p.extract_text() or "" for p in reader.pages)
         except Exception:
-            return "[Không đọc được PDF]"
+            return "[Khong doc duoc PDF]"
     if name.endswith(".docx"):
         try:
             from docx import Document
             doc = Document(io.BytesIO(data))
             return "\n".join(p.text for p in doc.paragraphs)
         except Exception:
-            return "[Không đọc được DOCX]"
+            return "[Khong doc duoc DOCX]"
     return ""
 
 
 def usd(v):
     a = abs(v)
     if a >= 1e9:
-        return f"{a/1e9:,.2f} tỷ USD"
+        return f"{a/1e9:,.2f} ty USD"
     if a >= 1e6:
-        return f"{a/1e6:,.1f} triệu USD"
+        return f"{a/1e6:,.1f} trieu USD"
     if a >= 1e3:
-        return f"{a/1e3:,.0f} nghìn USD"
+        return f"{a/1e3:,.0f} nghin USD"
     return f"{a:,.0f} USD"
 
 
@@ -138,171 +141,165 @@ def safe_html(df, max_rows: int = 30) -> str:
         d = d.astype(str)
         return d.to_html(classes="table table-sm", index=False, escape=True, border=0)
     except Exception as e:
-        return f"<p class='text-danger'>Không render được bảng: {e}</p>"
+        return f"<p class='text-danger'>Khong render duoc bang: {e}</p>"
 
 
-def _num_series(s: pd.Series) -> pd.Series:
-    if pd.api.types.is_numeric_dtype(s):
-        return pd.to_numeric(s, errors="coerce").fillna(0)
-    return (
-        pd.to_numeric(
-            s.astype(str).str.replace(r"[^\d,.\-]", "", regex=True).str.replace(",", "", regex=False),
-            errors="coerce",
-        ).fillna(0)
-    )
+# ───────────────────────── Plan (exact Excel KE_HOACH) ─────────────────────────
 
-
-def load_plan(plan_raw: pd.DataFrame | None) -> list[dict]:
+def build_plan_grid(plan_raw: pd.DataFrame, phong: str, d1, d2, year: int = PLAN_YEAR):
     """
-    Flexible KE_HOACH loader.
-    Looks for columns like: Metric/Chỉ tiêu, KH_Quy, KH_Nam, TH (optional).
-    Returns list of {name, th, kh_q, kh_y, pct_q, pct_y}.
-    Actual TH values are filled later from metrics.
+    Exact port of Excel Python formula for sheet KE_HOACH!A1:O230.
+    Returns: grid (3 metrics x 6 cells of (th,kh,pct)), metrics, q_label, y_label
+    or (None, None, None, None) if plan missing.
     """
     if plan_raw is None or plan_raw.empty:
-        return []
+        return None, None, None, None
 
-    cols = {str(c).strip().lower(): c for c in plan_raw.columns}
+    def norm(s):
+        return " ".join(str(s).replace("\xa0", " ").split()).lower()
 
-    def find(*cands):
-        for c in cands:
-            for k, orig in cols.items():
-                if c in k or k == c:
-                    return orig
-        return None
+    def code_of(s):
+        s = ud.normalize("NFD", str(s).replace("đ", "d").replace("Đ", "D"))
+        s = "".join(ch for ch in s if ud.category(ch) != "Mn")
+        return "".join(w if w.isdigit() else w[0] for w in re.findall(r"[A-Za-z]+|\d+", s)).lower()
 
-    name_col = find("metric", "chi tieu", "chi_tieu", "chỉ tiêu", "ten", "name", "hang muc", "hạng mục")
-    kh_q_col = find("kh_quy", "kh quý", "kh quy", "ke hoach quy", "kế hoạch quý", "target_q", "khq")
-    kh_y_col = find("kh_nam", "kh năm", "kh nam", "ke hoach nam", "kế hoạch năm", "target_y", "khn")
-    th_col = find("thuc hien", "thực hiện", "th", "actual", "ds")
+    def num(x):
+        try:
+            v = float(x)
+            return 0.0 if pd.isna(v) else v
+        except Exception:
+            return 0.0
 
-    if name_col is None:
-        # first column as name
-        name_col = plan_raw.columns[0]
+    plan = plan_raw.copy()
+    while plan.shape[1] < 15:
+        plan[plan.shape[1]] = 0
+    if len(plan) < 186:
+        extra = pd.DataFrame([[None] * plan.shape[1]] * (186 - len(plan)))
+        plan = pd.concat([plan, extra], ignore_index=True)
 
-    rows = []
-    for _, r in plan_raw.iterrows():
-        name = str(r.get(name_col, "")).strip()
-        if not name or name.lower() in ("nan", "none", ""):
-            continue
-        kh_q = float(_num_series(pd.Series([r.get(kh_q_col, 0)])).iloc[0]) if kh_q_col else 0.0
-        kh_y = float(_num_series(pd.Series([r.get(kh_y_col, 0)])).iloc[0]) if kh_y_col else 0.0
-        th = float(_num_series(pd.Series([r.get(th_col, 0)])).iloc[0]) if th_col else 0.0
-        rows.append({
-            "name": name,
-            "th": th,
-            "kh_q": kh_q,
-            "kh_y": kh_y,
-            "pct_q": (th / kh_q) if kh_q > 0 else 0.0,
-            "pct_y": (th / kh_y) if kh_y > 0 else 0.0,
-        })
-    return rows
+    def V(r, col):
+        try:
+            return num(plan.iloc[r - 1, col])
+        except Exception:
+            return 0.0
 
+    rooms_n = [norm(plan.iloc[6 - 1 + 3 * i, 0]) for i in range(15)]
 
-def match_plan_to_metrics(plan_rows: list, metrics: dict) -> list:
-    """
-    Overlay actual performance onto plan rows by name keywords.
-    MBNT DS / LN, TTQT DS / XK / NK.
-    """
-    if not plan_rows:
-        # synthesise default plan rows from metrics if no plan file
-        return [
-            {"name": "DS MBNT (USD)", "th": metrics.get("mbnt_ds", 0), "kh_q": 0, "kh_y": 0, "pct_q": 0, "pct_y": 0},
-            {"name": "LN MBNT (VND)", "th": metrics.get("mbnt_ln", 0), "kh_q": 0, "kh_y": 0, "pct_q": 0, "pct_y": 0},
-            {"name": "DS TTQT (USD)", "th": metrics.get("ttqt_ds", 0), "kh_q": 0, "kh_y": 0, "pct_q": 0, "pct_y": 0},
-            {"name": "XK TTQT (USD)", "th": metrics.get("ttqt_xk", 0), "kh_q": 0, "kh_y": 0, "pct_q": 0, "pct_y": 0},
-            {"name": "NK TTQT (USD)", "th": metrics.get("ttqt_nk", 0), "kh_q": 0, "kh_y": 0, "pct_q": 0, "pct_y": 0},
-        ]
+    d1 = pd.Timestamp(d1)
+    d2 = pd.Timestamp(d2)
+    m1, m2 = d1.month, d2.month
+    if d1.year < year:
+        m1 = 1
+    if d2.year > year:
+        m2 = 12
+    QN = (d2.month - 1) // 3 + 1
+    Q_COL = 1 + d2.month
+    Y_COL = 14
+    Q_LABEL = f"Q{QN}/{d2.year}"
+    Y_LABEL = f"{d2.year}"
 
-    mapping = [
-        (["mbnt", "ngoai te", "ngoại tệ", "forex", "ds mbnt"], "mbnt_ds"),
-        (["ln", "loi nhuan", "lợi nhuận", "profit"], "mbnt_ln"),
-        (["ttqt", "xnk", "thanh toan quoc te", "thanh toán quốc tế", "ds ttqt"], "ttqt_ds"),
-        (["xk", "xuat khau", "xuất khẩu", "export"], "ttqt_xk"),
-        (["nk", "nhap khau", "nhập khẩu", "import"], "ttqt_nk"),
+    METRICS = [
+        dict(name="DS MBNT", unit="tr.USD"),
+        dict(name="LN MBNT", unit="ty VND"),
+        dict(name="DS TTQT-TTTM", unit="tr.USD"),
+    ]
+    ROWS = [
+        dict(k0=6, cn=54, tsc=60, tot=63),       # DS MBNT
+        dict(k0=69, cn=117, tsc=123, tot=126),   # LN MBNT
+        dict(k0=132, cn=177, tsc=180, tot=183),  # DS TTQT-TTTM
     ]
 
-    out = []
-    for row in plan_rows:
-        name_l = row["name"].lower()
-        th = row["th"]
-        for keys, mkey in mapping:
-            if any(k in name_l for k in keys):
-                th = float(metrics.get(mkey, th) or 0)
-                break
-        kh_q, kh_y = row["kh_q"], row["kh_y"]
-        out.append({
-            "name": row["name"],
-            "th": th,
-            "kh_q": kh_q,
-            "kh_y": kh_y,
-            "pct_q": (th / kh_q) if kh_q > 0 else 0.0,
-            "pct_y": (th / kh_y) if kh_y > 0 else 0.0,
-        })
-    return out
+    def is_cum(k):
+        R = ROWS[k]
+        for r in (R["cn"] + 1, R["tot"] + 1):
+            xs = [V(r, 1 + m) for m in range(1, m2 + 1)]
+            if m2 >= 3 and xs[-1] > 0:
+                up = sum(1 for i in range(1, m2) if xs[i] > xs[i - 1])
+                return (
+                    all(xs[i] >= xs[i - 1] - 1e-9 for i in range(1, m2))
+                    and up >= max(2, int(0.6 * (m2 - 1)))
+                )
+        return False
+
+    CUM = [is_cum(k) for k in range(3)]
+
+    def th_cum(k, r_th):
+        if CUM[k]:
+            return V(r_th, 1 + m2) - (V(r_th, m1) if m1 > 1 else 0.0)
+        return float(sum(V(r_th, 1 + m) for m in range(m1, m2 + 1)))
+
+    key = norm(phong or "")
+    codes = [code_of(x) for x in rooms_n]
+    if key and key in rooms_n:
+        i_room = rooms_n.index(key)
+    elif key and key.replace(" ", "") in codes:
+        i_room = codes.index(key.replace(" ", ""))
+    else:
+        i_room = None
+    phong_mode = i_room is not None
+
+    def cells(k, kh_col):
+        R = ROWS[k]
+        r_phong = (R["k0"] + 3 * i_room) if phong_mode else R["tot"]
+        out = []
+        for r_kh in (r_phong, R["cn"], R["tsc"]):
+            th = th_cum(k, r_kh + 1)
+            kh = V(r_kh, kh_col)
+            out.append((th, kh, th / kh if kh > 0 else 0.0))
+        return out
+
+    grid = [cells(k, Q_COL) + cells(k, Y_COL) for k in range(3)]
+    return grid, METRICS, Q_LABEL, Y_LABEL
 
 
-def chart_plan_pies(plan_rows: list, phong: str, d_from, d_to) -> str:
-    """
-    Simple 2-row pie/donut gauges: % vs KH Quý and % vs KH Năm.
-    Lightweight – always generated when plan_rows exist (even if ENABLE_CHARTS=0).
-    """
-    if not plan_rows:
-        return ""
+def render_plan_chart(plan_raw, phong, d_from, d_to):
+    """Returns (base64_png, summary_lines)."""
+    grid, metrics, q_label, y_label = build_plan_grid(plan_raw, phong, d_from, d_to)
+    if grid is None:
+        return "", []
 
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        from utils.charts import chart_plan_completion
 
-        n = min(len(plan_rows), 5)
-        rows = plan_rows[:n]
-        fig, axes = plt.subplots(2, n, figsize=(2.2 * n, 4.6), dpi=80)
-        if n == 1:
-            axes = np.array([[axes[0]], [axes[1]]])
-
-        colors = ["#0EA5E9", "#22C55E", "#8B5CF6", "#F59E0B", "#EF4444"]
-        track = "#E5E7EB"
-
-        for i, r in enumerate(rows):
-            for row_i, (pct, label) in enumerate([
-                (r["pct_q"], "Quý"),
-                (r["pct_y"], "Năm"),
-            ]):
-                ax = axes[row_i, i]
-                fill = max(0.0, min(1.0, pct))
-                if r["kh_q" if row_i == 0 else "kh_y"] <= 0:
-                    ax.pie([1], colors=[track], startangle=90,
-                           wedgeprops={"width": 0.35, "linewidth": 0})
-                    ax.text(0, 0, "N/A", ha="center", va="center", fontsize=8, color="#9CA3AF")
-                else:
-                    vals = [fill, 1 - fill] if fill < 1 else [1]
-                    cols = [colors[i % len(colors)], track] if fill < 1 else [colors[i % len(colors)]]
-                    ax.pie(vals, colors=cols, startangle=90, counterclock=False,
-                           wedgeprops={"width": 0.35, "linewidth": 0})
-                    ax.text(0, 0.05, f"{pct*100:.1f}%", ha="center", va="center",
-                            fontsize=9, fontweight="bold", color="#111827")
-                    ax.text(0, -0.28, label, ha="center", va="center", fontsize=6, color="#6B7280")
-                ax.set_aspect("equal")
-                if row_i == 0:
-                    title = r["name"][:22] + ("…" if len(r["name"]) > 22 else "")
-                    ax.set_title(title, fontsize=7, pad=4)
-
-        fig.suptitle(
-            f"% hoàn thành kế hoạch – {phong or 'VCB HCM'}  |  {d_from:%d/%m/%Y} → {d_to:%d/%m/%Y}",
-            fontsize=9, fontweight="bold", y=0.98,
+        fig = chart_plan_completion(
+            grid,
+            metrics,
+            loc=phong or "VCB HCM",
+            d1=pd.Timestamp(d_from),
+            d2=pd.Timestamp(d_to),
+            q_label=q_label,
+            y_label=y_label,
+            bg="#14532D",
         )
-        fig.subplots_adjust(top=0.88, bottom=0.05, left=0.02, right=0.98, wspace=0.15, hspace=0.25)
-
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=80)
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=100, facecolor="#14532D")
         plt.close(fig)
         buf.seek(0)
-        return base64.b64encode(buf.read()).decode("ascii")
-    except Exception as e:
-        print(f"Plan pie chart failed: {e}")
-        return ""
+        b64 = base64.b64encode(buf.read()).decode("ascii")
 
+        names = ["KH phong", "KH CN giao", "KH TSC giao"]
+        summary = []
+        for mi, m in enumerate(metrics):
+            for ci, cname in enumerate(names):
+                th, kh, pct = grid[mi][ci]
+                summary.append(
+                    f"{m['name']} | {cname} Q: TH={th:,.1f} KH={kh:,.1f} ({pct*100:.1f}%)"
+                )
+            for ci, cname in enumerate(names):
+                th, kh, pct = grid[mi][ci + 3]
+                summary.append(
+                    f"{m['name']} | {cname} Y: TH={th:,.1f} KH={kh:,.1f} ({pct*100:.1f}%)"
+                )
+        return b64, summary
+    except Exception as e:
+        print(f"Plan chart failed: {e}")
+        return "", []
+
+
+# ───────────────────────── Optional bar/scatter charts ─────────────────────────
 
 def generate_charts_safe(TDS, BDS, TLN, BLN, TQ, BQ, q_filt, df):
     charts = {
@@ -349,75 +346,94 @@ def generate_charts_safe(TDS, BDS, TLN, BLN, TQ, BQ, q_filt, df):
     return charts
 
 
+# ───────────────────────── Report text ─────────────────────────
+
 def build_report(df, dall, qall, mm, tt, phong, d_from, d_to):
     def phan_tich(X, O, Y, Yv, tx_, ty_):
         L = []
         d = df[df[X] > 0].copy()
         if d.empty:
-            return [f"Không có công ty nào có {tx_} trong kỳ đã chọn."], {}
+            return [f"Khong co cong ty nao co {tx_} trong ky da chon."], {}
         TX, TY, TV = d[X].sum(), d[Y].sum(), d[Yv].sum()
         r = d[Y] / d[X]
         L.append(
-            f"Có {len(d):,} công ty có {tx_} với tổng {usd(TX)}. "
-            f"Trong số đó {int((d[Y]>0).sum()):,} công ty có giao dịch {ty_} với VCB, tổng {usd(TY)}."
+            f"Co {len(d):,} cong ty co {tx_} voi tong {usd(TX)}. "
+            f"Trong so do {int((d[Y]>0).sum()):,} cong ty co giao dich {ty_} voi VCB, tong {usd(TY)}."
         )
-        L.append(f"Tỷ lệ chuyển đổi chung: cứ 100 USD {tx_} thì VCB nhận được {TY/TX*100:.0f} USD {ty_}.")
-        lab = ["Không giao dịch", "Dưới 30%", "Từ 30% đến 80%", "Từ 80% đến 120%", "Trên 120%"]
+        L.append(f"Ty le chuyen doi chung: cu 100 USD {tx_} thi VCB nhan duoc {TY/TX*100:.0f} USD {ty_}.")
+        lab = ["Khong giao dich", "Duoi 30%", "Tu 30% den 80%", "Tu 80% den 120%", "Tren 120%"]
         d["Nhom"] = np.select([d[Y] == 0, r < 0.3, r < 0.8, r <= 1.2], lab[:4], default=lab[4])
-        L.append(f"Phân nhóm theo tỷ lệ {ty_}/{tx_}:")
+        L.append(f"Phan nhom theo ty le {ty_}/{tx_}:")
         for k in lab:
             s = d[d.Nhom == k]
             if len(s):
-                L.append(f"   - {k}: {len(s):,} công ty, chiếm {pc(s[X].sum(), TX)} tổng {tx_}.")
+                L.append(f"   - {k}: {len(s):,} cong ty, chiem {pc(s[X].sum(), TX)} tong {tx_}.")
         lo = d[d.Nhom.isin(lab[:2])]
         L.append(
-            f"Nhóm dưới 30% (gồm cả không giao dịch) có {len(lo):,} công ty, "
-            f"nắm {pc(lo[X].sum(), TX)} tổng {tx_} nhưng chỉ đóng góp {pc(lo[Y].sum(), TY)} tổng {ty_}."
+            f"Nhom duoi 30% (gom ca khong giao dich) co {len(lo):,} cong ty, "
+            f"nam {pc(lo[X].sum(), TX)} tong {tx_} nhung chi dong gop {pc(lo[Y].sum(), TY)} tong {ty_}."
         )
-        L.append(f"Giải ngân vốn vay ngoại tệ chiếm {pc(TV, TY)} tổng {ty_} ({usd(TV)}).")
+        L.append(f"Giai ngan von vay ngoai te chiem {pc(TV, TY)} tong {ty_} ({usd(TV)}).")
         d["Net"] = (d[X] - d[O]).clip(lower=0)
         d["Tn"] = (d.Net - d[Y]).clip(lower=0)
         low = d[d[Y] < 0.5 * d[X]].copy()
         low["Nn"] = np.select([low[O] >= 0.7 * low[X], low[Y] == 0], ["A", "B"], default="C")
         tn = low[low.Nn.isin(["B", "C"])].Tn.sum()
-        L.append(f"Tiềm năng khai thác thực (nhóm B+C): khoảng {usd(tn)}.")
+        L.append(f"Tiem nang khai thac thuc (nhom B+C): khoang {usd(tn)}.")
         return L, {"conv": TY / TX if TX else 0, "tn": tn}
 
     LX, sx = phan_tich("XK", "NK", "BUY", "BUY_VAY", "XK", "BUY")
     LN, sn = phan_tich("NK", "XK", "SELL", "SELL_VAY", "NK", "SELL")
 
     R = [
-        "BÁO CÁO PHÂN TÍCH QUAN HỆ DS TTQT – DS MBNT",
-        f"Phòng/đơn vị: {phong or 'VCB HCM'}. Kỳ: {d_from:%d/%m/%Y} đến {d_to:%d/%m/%Y}.",
-        f"Dữ liệu: {len(dall):,} dòng MBNT raw → {len(mm):,} dùng phân tích; "
-        f"{len(qall):,} dòng TTQT → {len(tt):,} dùng. {len(df):,} doanh nghiệp (đã loại cá nhân).",
+        "BAO CAO PHAN TICH QUAN HE DS TTQT - DS MBNT",
+        f"Phong/don vi: {phong or 'VCB HCM'}. Ky: {d_from:%d/%m/%Y} den {d_to:%d/%m/%Y}.",
+        f"Du lieu: {len(dall):,} dong MBNT raw -> {len(mm):,} dung phan tich; "
+        f"{len(qall):,} dong TTQT -> {len(tt):,} dung. {len(df):,} doanh nghiep (da loai ca nhan).",
         "",
-        "PHẦN 1. XUẤT KHẨU (XK) VÀ BUY",
-    ] + LX + ["", "PHẦN 2. NHẬP KHẨU (NK) VÀ SELL"] + LN + ["", "PHẦN 3. KẾT LUẬN"]
+        "PHAN 1. XUAT KHAU (XK) VA BUY",
+    ] + LX + ["", "PHAN 2. NHAP KHAU (NK) VA SELL"] + LN + ["", "PHAN 3. KET LUAN"]
 
     if sx and sn:
         cx, cnv = sx["conv"] * 100, sn["conv"] * 100
-        R.append(f"Tỷ lệ chuyển đổi XK→BUY: {cx:.0f}%, NK→SELL: {cnv:.0f}%.")
+        R.append(f"Ty le chuyen doi XK->BUY: {cx:.0f}%, NK->SELL: {cnv:.0f}%.")
         R.append(
-            "Công ty giữ chân VCB tốt hơn ở chiều mua ngoại tệ (thanh toán NK)."
+            "Cong ty giu chan VCB tot hon o chieu mua ngoai te (thanh toan NK)."
             if cnv > cx
-            else "Công ty giữ chân VCB tốt hơn ở chiều bán ngoại tệ."
+            else "Cong ty giu chan VCB tot hon o chieu ban ngoai te."
         )
         ln_ = "XK" if sx["tn"] >= sn["tn"] else "NK"
-        R.append(f"Tiềm năng khai thác lớn hơn nằm ở phía {ln_}.")
+        R.append(f"Tiem nang khai thac lon hon nam o phia {ln_}.")
 
     return "\n".join(R)
 
 
+# ───────────────────────── PDF ─────────────────────────
+
+def _pdf_safe(s: str) -> str:
+    if not s:
+        return ""
+    repl = {
+        "–": "-", "—": "-", "−": "-",
+        "“": '"', "”": '"', "‘": "'", "’": "'",
+        "…": "...", "•": "-", "·": "-",
+        "₫": "VND", "→": "->", "←": "<-",
+        "≥": ">=", "≤": "<=", "×": "x",
+        "đ": "d", "Đ": "D",
+    }
+    for a, b in repl.items():
+        s = s.replace(a, b)
+    return s.encode("latin-1", errors="replace").decode("latin-1")
+
+
 def build_pdf(data: dict) -> bytes:
-    """Build a multi-page PDF: cover metrics + report text + available charts."""
     from fpdf import FPDF
 
     class PDF(FPDF):
         def header(self):
             self.set_font("Helvetica", "B", 10)
             self.set_text_color(30, 58, 138)
-            self.cell(0, 6, "VCB Analytics – MBNT & TTQT/TTTM", ln=True)
+            self.cell(0, 6, "VCB Analytics - MBNT & TTQT/TTTM", ln=True)
             self.set_draw_color(30, 58, 138)
             self.line(10, self.get_y(), 200, self.get_y())
             self.ln(4)
@@ -426,69 +442,63 @@ def build_pdf(data: dict) -> bytes:
             self.set_y(-12)
             self.set_font("Helvetica", "I", 8)
             self.set_text_color(120, 120, 120)
-            self.cell(0, 8, f"Trang {self.page_no()}/{{nb}}", align="C")
+            self.cell(0, 8, f"Page {self.page_no()}/{{nb}}", align="C")
 
     pdf = PDF(orientation="P", unit="mm", format="A4")
     pdf.alias_nb_pages()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # Title
     pdf.set_font("Helvetica", "B", 16)
     pdf.set_text_color(15, 23, 42)
-    pdf.cell(0, 10, "Bao cao phan tich MBNT & TTQT", ln=True)
+    pdf.cell(0, 10, _pdf_safe("Bao cao phan tich MBNT & TTQT"), ln=True)
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(71, 85, 105)
-    pdf.cell(0, 6, f"Phong: {data.get('phong') or 'VCB HCM'}  |  {data.get('d_from')} -> {data.get('d_to')}", ln=True)
+    pdf.cell(
+        0, 6,
+        _pdf_safe(
+            f"Phong: {data.get('phong') or 'VCB HCM'}  |  {data.get('d_from')} -> {data.get('d_to')}"
+        ),
+        ln=True,
+    )
     pdf.ln(4)
 
-    # Metrics box
     m = data.get("metrics") or {}
     pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(15, 23, 42)
     pdf.cell(0, 7, "Tong quan so lieu", ln=True)
     pdf.set_font("Helvetica", "", 9)
-    lines = [
+    for L in [
         f"MBNT DS (USD): {m.get('mbnt_ds', 0):,.0f}",
         f"MBNT LN (VND): {m.get('mbnt_ln', 0):,.0f}",
         f"MBNT so GD: {m.get('mbnt_gd', 0):,}",
         f"MBNT CIF: {m.get('mbnt_cif', 0):,}",
         f"TTQT DS (USD): {m.get('ttqt_ds', 0):,.0f}",
         f"TTQT XK: {m.get('ttqt_xk', 0):,.0f}  |  NK: {m.get('ttqt_nk', 0):,.0f}",
-    ]
-    for L in lines:
-        pdf.cell(0, 5, L, ln=True)
+    ]:
+        pdf.cell(0, 5, _pdf_safe(L), ln=True)
     pdf.ln(3)
 
-    # Plan rows
-    plan_rows = data.get("plan_rows") or []
-    if plan_rows:
+    plan_summary = data.get("plan_summary") or []
+    if plan_summary:
         pdf.set_font("Helvetica", "B", 11)
         pdf.cell(0, 7, "% hoan thanh ke hoach", ln=True)
         pdf.set_font("Helvetica", "", 8)
-        for r in plan_rows:
-            pdf.cell(
-                0, 5,
-                f"{r['name'][:40]}: TH={r['th']:,.1f} | KH_Q={r['kh_q']:,.1f} ({r['pct_q']*100:.1f}%) | KH_Y={r['kh_y']:,.1f} ({r['pct_y']*100:.1f}%)",
-                ln=True,
-            )
+        for line in plan_summary:
+            pdf.cell(0, 5, _pdf_safe(line), ln=True)
         pdf.ln(3)
 
-    # Report text (strip non-latin for core fonts; still readable)
     report = data.get("report_text") or ""
-    # FPDF core fonts are Latin-1; keep ASCII-ish fallback by encoding safely
-    safe_report = report.encode("latin-1", errors="replace").decode("latin-1")
     pdf.set_font("Helvetica", "B", 11)
     pdf.cell(0, 7, "Bao cao phan tich", ln=True)
     pdf.set_font("Helvetica", "", 8)
-    for line in safe_report.splitlines():
+    for line in _pdf_safe(report).splitlines():
         pdf.multi_cell(0, 4, line)
     pdf.ln(4)
 
-    # Charts as images
     charts = data.get("charts") or {}
     chart_order = [
-        ("plan_pie", "Ke hoach % hoan thanh"),
+        ("plan_pie", "Hoan thanh ke hoach (pie)"),
         ("mbnt_top_ds", "TOP DS MBNT"),
         ("mbnt_bot_ds", "BOT DS MBNT"),
         ("mbnt_top_ln", "TOP LN MBNT"),
@@ -508,7 +518,7 @@ def build_pdf(data: dict) -> bytes:
             img_path = io.BytesIO(img_bytes)
             pdf.add_page()
             pdf.set_font("Helvetica", "B", 11)
-            pdf.cell(0, 8, title, ln=True)
+            pdf.cell(0, 8, _pdf_safe(title), ln=True)
             pdf.image(img_path, x=10, w=190)
         except Exception as e:
             print(f"PDF chart embed failed ({key}): {e}")
@@ -522,7 +532,7 @@ def build_pdf(data: dict) -> bytes:
 
 @app.errorhandler(413)
 def request_entity_too_large(_error):
-    flash("Tổng dung lượng file upload vượt giới hạn 80 MB.", "error")
+    flash("Tong dung luong file upload vuot gioi han 80 MB.", "error")
     return redirect(url_for("index")), 413
 
 
@@ -546,18 +556,18 @@ def run_analysis():
     d_to_s = request.form.get("d_to") or "2026-12-31"
 
     if not mbnt_f or not ttqt_f or mbnt_f.filename == "" or ttqt_f.filename == "":
-        flash("Cần upload đủ 2 file: Data_Raw_MBNT và Data_Raw_TTQT_TTTM.", "error")
+        flash("Can upload du 2 file: Data_Raw_MBNT va Data_Raw_TTQT_TTTM.", "error")
         return redirect(url_for("index"))
 
     try:
         d_from = datetime.strptime(d_from_s, "%Y-%m-%d").date()
         d_to = datetime.strptime(d_to_s, "%Y-%m-%d").date()
     except ValueError:
-        flash("Định dạng ngày không hợp lệ.", "error")
+        flash("Dinh dang ngay khong hop le.", "error")
         return redirect(url_for("index"))
 
     if d_from > d_to:
-        flash("Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc.", "error")
+        flash("Ngay bat dau phai nho hon hoac bang ngay ket thuc.", "error")
         return redirect(url_for("index"))
 
     try:
@@ -566,7 +576,7 @@ def run_analysis():
         plan_raw = read_df(plan_f) if plan_f and plan_f.filename else None
 
         if mbnt_raw is None or ttqt_raw is None:
-            raise ValueError("Không đọc được nội dung từ file dữ liệu.")
+            raise ValueError("Khong doc duoc noi dung tu file du lieu.")
 
         dall, qall, SA, SQ = prepare_all(mbnt_raw, ttqt_raw)
         del mbnt_raw, ttqt_raw
@@ -595,18 +605,18 @@ def run_analysis():
             "ttqt_nk": float(q_filt.nk.sum()) if len(q_filt) else 0,
         }
 
-        # Plan
-        plan_rows = match_plan_to_metrics(load_plan(plan_raw), metrics)
-        del plan_raw
+        # Plan chart – always (exact Excel logic)
+        plan_pie_b64, plan_summary = "", []
+        if plan_raw is not None:
+            plan_pie_b64, plan_summary = render_plan_chart(plan_raw, phong, d_from, d_to)
 
-        # Charts (bar/scatter optional; plan pie always attempted if plan data exists)
         charts = generate_charts_safe(TDS, BDS, TLN, BLN, TQ, BQ, q_filt, df)
-        charts["plan_pie"] = chart_plan_pies(plan_rows, phong, d_from, d_to)
+        charts["plan_pie"] = plan_pie_b64
 
         # Group summary
         groups = {}
         try:
-            for side, X, Y in [("XK → BUY", "XK", "BUY"), ("NK → SELL", "NK", "SELL")]:
+            for side, X, Y in [("XK -> BUY", "XK", "BUY"), ("NK -> SELL", "NK", "SELL")]:
                 if X not in df.columns or Y not in df.columns:
                     continue
                 dside = df[pd.to_numeric(df[X], errors="coerce").fillna(0) > 0].copy()
@@ -615,7 +625,7 @@ def run_analysis():
                 dside[X] = pd.to_numeric(dside[X], errors="coerce").fillna(0)
                 dside[Y] = pd.to_numeric(dside[Y], errors="coerce").fillna(0)
                 r = dside[Y] / dside[X].replace(0, np.nan)
-                lab = ["1. Không GD MBNT", "2. <30%", "3. 30-80%", "4. 80-120%", "5. >120%"]
+                lab = ["1. Khong GD MBNT", "2. <30%", "3. 30-80%", "4. 80-120%", "5. >120%"]
                 dside["Nhom"] = np.select(
                     [dside[Y] == 0, r < 0.3, r < 0.8, r <= 1.2],
                     lab[:4],
@@ -648,7 +658,8 @@ def run_analysis():
             "charts": charts,
             "groups": groups,
             "metrics": metrics,
-            "plan_rows": plan_rows,
+            "plan_summary": plan_summary,
+            "plan_rows": [],
             "df_csv": df_csv,
             "tds_html": tds_html,
             "bds_html": bds_html,
@@ -659,16 +670,20 @@ def run_analysis():
             "chat_history": [],
         }
         msg = note
+        if plan_raw is None:
+            msg += " (Chua upload KE_HOACH - khong co pie ke hoach)"
         if not ENABLE_CHARTS:
-            msg += " (Bar charts tắt – set ENABLE_CHARTS=1 nếu cần)"
+            msg += " (Bar charts tat - set ENABLE_CHARTS=1 neu can)"
         flash(msg, "success")
 
         del dall, qall, df, mm, tt, d_filt, q_filt
         del cif_mbnt, TDS, BDS, TLN, BLN, cq, TQ, BQ, SA, SQ
+        if plan_raw is not None:
+            del plan_raw
         gc.collect()
 
     except Exception as e:
-        flash(f"Lỗi xử lý dữ liệu hoặc vượt quá giới hạn bộ nhớ server: {e}", "error")
+        flash(f"Loi xu ly du lieu hoac vuot qua gioi han bo nho server: {e}", "error")
         gc.collect()
         return redirect(url_for("index"))
 
@@ -679,7 +694,7 @@ def run_analysis():
 def dashboard():
     data = _STORE.get(_sid())
     if not data:
-        flash("Chưa có dữ liệu. Hãy upload và chạy phân tích trước.", "error")
+        flash("Chua co du lieu. Hay upload va chay phan tich truoc.", "error")
         return redirect(url_for("index"))
     return render_template("dashboard.html", data=data)
 
@@ -724,7 +739,7 @@ def export_pdf():
             download_name="vcb_bao_cao.pdf",
         )
     except Exception as e:
-        flash(f"Không tạo được PDF: {e}", "error")
+        flash(f"Khong tao duoc PDF: {e}", "error")
         return redirect(url_for("dashboard"))
 
 
@@ -732,11 +747,10 @@ def export_pdf():
 def ai_generate():
     data = _STORE.get(_sid())
     if not data:
-        return jsonify({"error": "Chưa có dữ liệu"}), 400
-    # Always use server env key – never accept from client
+        return jsonify({"error": "Chua co du lieu"}), 400
     context = data.get("report_text", "")
     if data.get("ext_text"):
-        context += "\n\n=== BÁO CÁO EXTERNAL ===\n" + data["ext_text"][:8000]
+        context += "\n\n=== BAO CAO EXTERNAL ===\n" + data["ext_text"][:8000]
     report = generate_professional_report(context, api_key=None)
     data["ai_report"] = report
     return jsonify({"report": report})
@@ -746,7 +760,7 @@ def ai_generate():
 def ai_chat():
     data = _STORE.get(_sid())
     if not data:
-        return jsonify({"error": "Chưa có dữ liệu"}), 400
+        return jsonify({"error": "Chua co du lieu"}), 400
     body = request.json or {}
     user_msg = body.get("message", "").strip()
     if not user_msg:
@@ -755,7 +769,7 @@ def ai_chat():
     history.append({"role": "user", "content": user_msg})
     context = data.get("report_text", "")
     if data.get("ext_text"):
-        context += "\n\n=== BÁO CÁO EXTERNAL ===\n" + data["ext_text"][:8000]
+        context += "\n\n=== BAO CAO EXTERNAL ===\n" + data["ext_text"][:8000]
     ans = chat_with_data(history, context, api_key=None)
     history.append({"role": "assistant", "content": ans})
     data["chat_history"] = history
