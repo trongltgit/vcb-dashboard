@@ -3,7 +3,7 @@ services:
     name: vcb-dashboard
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 300
     envVars:
       - key: GROQ_API_KEY
         sync: false
@@ -11,3 +11,5 @@ services:
         generateValue: true
       - key: PYTHON_VERSION
         value: "3.11.9"
+      - key: ENABLE_CHARTS
+        value: "0"
